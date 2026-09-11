@@ -1,0 +1,821 @@
+import AppKit
+
+/// Main editor UI: toolbar + sidebar + canvas + tab bar.
+final class EditorViewController: NSViewController {
+    // Data
+    private(set) var tabs: [EditorTab] = []
+    private var currentIndex: Int?
+    private var nextSequence = 1
+    private var style = EditorStyle()
+    private var undoByTab: [UUID: UndoStack] = [:]
+
+    // UI
+    private let rootStack = NSStackView()
+    private let toolbar = NSView()
+    private let sidebar = NSView()
+    private let tabStrip = NSStackView()
+    private let statusLabel = NSTextField(labelWithString: "还没有截图")
+    private let hintLabel = NSTextField(labelWithString: "")
+    private let scroll = NSScrollView()
+    private let canvas = CanvasView()
+    private let emptyState = NSView()
+    private let colorWell = NSColorWell()
+
+    private var sidebarButtons: [NSButton] = []
+    private var toolButtons: [ToolKind: NSButton] = [:]
+    private var keyMonitor: Any?
+
+    var onCaptureRequest: (() -> Void)?
+
+    private var currentTab: EditorTab? {
+        guard let i = currentIndex, i >= 0, i < tabs.count else { return nil }
+        return tabs[i]
+    }
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 800))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = Theme.windowBackground.cgColor
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        buildLayout()
+        bindCanvas()
+        refreshEmptyState()
+        applyShortcutHints()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        installKeyMonitor()
+    }
+
+    deinit {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+    }
+
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.view.window?.isKeyWindow == true else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let cmd = flags.contains(.command)
+            // Don't steal keys from text fields
+            if let resp = self.view.window?.firstResponder, resp is NSTextView || resp is NSText {
+                if event.keyCode != 53 { return event }
+            }
+            if cmd && event.charactersIgnoringModifiers == "c" {
+                self.copySelection()
+                return nil
+            }
+            if cmd && event.charactersIgnoringModifiers == "v" {
+                self.paste()
+                return nil
+            }
+            if cmd && event.charactersIgnoringModifiers == "z" {
+                if flags.contains(.shift) { self.doRedo() } else { self.doUndo() }
+                return nil
+            }
+            if cmd && event.charactersIgnoringModifiers == "y" {
+                self.doRedo()
+                return nil
+            }
+            if cmd && event.charactersIgnoringModifiers == "s" {
+                self.saveCurrentTab()
+                return nil
+            }
+            if event.keyCode == 51 || event.keyCode == 117 {
+                self.canvas.deleteSelected()
+                return nil
+            }
+            return event
+        }
+    }
+
+    // MARK: - Layout
+
+    private func buildLayout() {
+        rootStack.orientation = .vertical
+        rootStack.spacing = 0
+        rootStack.distribution = .fill
+        rootStack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(rootStack)
+        NSLayoutConstraint.activate([
+            rootStack.topAnchor.constraint(equalTo: view.topAnchor),
+            rootStack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            rootStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            rootStack.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
+        buildToolbar()
+        buildBody()
+        buildTabStrip()
+        buildStatus()
+
+        rootStack.addArrangedSubview(toolbar)
+        rootStack.addArrangedSubview(bodyContainer)
+        rootStack.addArrangedSubview(tabContainer)
+        rootStack.addArrangedSubview(statusContainer)
+    }
+
+    private lazy var bodyContainer = NSView()
+    private lazy var tabContainer = NSView()
+    private lazy var statusContainer = NSView()
+
+    private func buildToolbar() {
+        toolbar.wantsLayer = true
+        toolbar.layer?.backgroundColor = Theme.toolbarBackground.cgColor
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.heightAnchor.constraint(equalToConstant: 48).isActive = true
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: toolbar.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor)
+        ])
+
+        let captureBtn = makePrimaryButton("开始截图", action: #selector(startCapture))
+
+        let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
+        let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
+        let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
+        let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
+
+        for b in [captureBtn, mosaicBtn, settingsBtn, undoBtn, redoBtn] {
+            stack.addArrangedSubview(b)
+        }
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        stack.addArrangedSubview(spacer)
+
+        // Right side: color swatch only (density / thickness / hotkey live in 设置)
+        colorWell.color = style.color
+        colorWell.target = self
+        colorWell.action = #selector(colorWellChanged)
+        colorWell.translatesAutoresizingMaskIntoConstraints = false
+        colorWell.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        colorWell.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        colorWell.toolTip = "画笔颜色"
+        stack.addArrangedSubview(colorWell)
+    }
+
+    private func buildBody() {
+        bodyContainer.translatesAutoresizingMaskIntoConstraints = false
+        bodyContainer.wantsLayer = true
+        bodyContainer.layer?.backgroundColor = Theme.windowBackground.cgColor
+
+        // Sidebar
+        sidebar.wantsLayer = true
+        sidebar.layer?.backgroundColor = Theme.sidebarBackground.cgColor
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        bodyContainer.addSubview(sidebar)
+
+        let sideStack = NSStackView()
+        sideStack.orientation = .vertical
+        sideStack.spacing = 6
+        sideStack.alignment = .centerX
+        sideStack.edgeInsets = NSEdgeInsets(top: 10, left: 6, bottom: 10, right: 6)
+        sideStack.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(sideStack)
+        NSLayoutConstraint.activate([
+            sideStack.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            sideStack.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            sideStack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+            sideStack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor)
+        ])
+
+        let tools: [ToolKind] = [
+            .select, .view, .text, .arrow, .line, .pen,
+            .rect, .roundedRect, .ellipse,
+            .solidRect, .solidRoundedRect, .solidEllipse,
+            .number
+        ]
+        for tool in tools {
+            let btn = NSButton(title: "", target: self, action: #selector(toolClicked(_:)))
+            btn.setButtonType(.toggle)
+            btn.bezelStyle = .smallSquare
+            btn.isBordered = true
+            btn.imagePosition = .imageOnly
+            // Text tool always shows a bold "T" so users recognize it as text.
+            if tool == .text {
+                btn.title = "T"
+                btn.font = .systemFont(ofSize: 15, weight: .bold)
+                btn.imagePosition = .noImage
+            } else if let img = NSImage(systemSymbolName: tool.systemImage, accessibilityDescription: tool.displayName)?
+                .withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) {
+                btn.image = img
+            } else {
+                btn.title = tool.shortLabel
+                btn.font = .systemFont(ofSize: 9, weight: .medium)
+                btn.imagePosition = .noImage
+            }
+            btn.toolTip = tool.displayName
+            btn.identifier = NSUserInterfaceItemIdentifier(tool.rawValue)
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            btn.widthAnchor.constraint(equalToConstant: 36).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 32).isActive = true
+            if tool == .select {
+                btn.state = .on
+            }
+            sideStack.addArrangedSubview(btn)
+            sidebarButtons.append(btn)
+            toolButtons[tool] = btn
+        }
+
+        // Canvas area — documentView uses frame-based layout, not Auto Layout.
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = true
+        scroll.backgroundColor = Theme.canvasBackground
+        scroll.automaticallyAdjustsContentInsets = false
+        bodyContainer.addSubview(scroll)
+
+        canvas.translatesAutoresizingMaskIntoConstraints = true
+        canvas.autoresizingMask = []
+        canvas.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        scroll.documentView = canvas
+        scroll.contentView.postsBoundsChangedNotifications = true
+
+        // Empty state
+        emptyState.translatesAutoresizingMaskIntoConstraints = false
+        emptyState.wantsLayer = true
+        bodyContainer.addSubview(emptyState)
+
+        let emptyLabel = NSTextField(wrappingLabelWithString: "")
+        emptyLabel.alignment = .center
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyState.addSubview(emptyLabel)
+        NSLayoutConstraint.activate([
+            emptyLabel.centerXAnchor.constraint(equalTo: emptyState.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: emptyState.centerYAnchor),
+            emptyLabel.widthAnchor.constraint(lessThanOrEqualTo: emptyState.widthAnchor, constant: -40)
+        ])
+        emptyLabel.tag = 99
+
+        NSLayoutConstraint.activate([
+            sidebar.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
+            sidebar.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+
+            scroll.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+
+            emptyState.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            emptyState.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            emptyState.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            emptyState.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor)
+        ])
+    }
+
+    private func buildTabStrip() {
+        tabContainer.translatesAutoresizingMaskIntoConstraints = false
+        tabContainer.wantsLayer = true
+        tabContainer.layer?.backgroundColor = Theme.toolbarBackground.cgColor
+        tabContainer.heightAnchor.constraint(equalToConstant: 44).isActive = true
+
+        tabStrip.orientation = .horizontal
+        tabStrip.spacing = 8
+        tabStrip.alignment = .centerY
+        tabStrip.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        tabStrip.translatesAutoresizingMaskIntoConstraints = false
+        tabContainer.addSubview(tabStrip)
+        NSLayoutConstraint.activate([
+            tabStrip.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: tabContainer.trailingAnchor),
+            tabStrip.topAnchor.constraint(equalTo: tabContainer.topAnchor),
+            tabStrip.bottomAnchor.constraint(equalTo: tabContainer.bottomAnchor)
+        ])
+    }
+
+    private func buildStatus() {
+        statusContainer.translatesAutoresizingMaskIntoConstraints = false
+        statusContainer.wantsLayer = true
+        statusContainer.layer?.backgroundColor = Theme.windowBackground.cgColor
+        statusContainer.heightAnchor.constraint(equalToConstant: 36).isActive = true
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        statusContainer.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: statusContainer.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: statusContainer.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: statusContainer.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: statusContainer.bottomAnchor)
+        ])
+
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(statusLabel)
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        stack.addArrangedSubview(spacer)
+
+        hintLabel.font = .systemFont(ofSize: 11)
+        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.stringValue = "截图已包含鼠标箭头"
+        stack.addArrangedSubview(hintLabel)
+    }
+
+    private func makeToolButton(_ title: String, action: Selector) -> NSButton {
+        let b = NSButton(title: title, target: self, action: action)
+        b.bezelStyle = .rounded
+        b.font = .systemFont(ofSize: 13)
+        return b
+    }
+
+    /// Soft sky-blue primary action with white label/icon.
+    private func makePrimaryButton(_ title: String, action: Selector) -> NSButton {
+        CapturePrimaryButton(title: title, target: self, action: action)
+    }
+
+    private func makeCaption(_ text: String) -> NSTextField {
+        let f = NSTextField(labelWithString: text)
+        f.font = .systemFont(ofSize: 12)
+        f.textColor = .secondaryLabelColor
+        return f
+    }
+
+    // MARK: - Canvas bindings
+
+    private func bindCanvas() {
+        canvas.onWillMutate = { [weak self] in
+            self?.pushUndoForCurrent()
+        }
+        canvas.onAnnotationsChanged = { [weak self] in
+            self?.refreshStatus()
+            self?.refreshTabs()
+        }
+        canvas.onRequestTextInsert = { [weak self] point in
+            self?.showTextPanel(at: point)
+        }
+        canvas.onRequestTextEdit = { [weak self] ann in
+            self?.showTextEditPanel(for: ann)
+        }
+        canvas.onSelectionChanged = { [weak self] rect in
+            self?.refreshStatus(selection: rect)
+        }
+        canvas.onRequestToolSwitch = { [weak self] tool in
+            // Auto-switch after draw/paste keeps the new object selected.
+            self?.selectedTool(tool, preserveSelection: true)
+        }
+    }
+
+    private func applyShortcutHints() {
+        let cmd = HotkeyService.shared.displayString
+        if let label = emptyState.viewWithTag(99) as? NSTextField {
+            label.stringValue = "还没有截图\n按 \(cmd) 框选屏幕，截图会自动变成一个新页签\n（当前快捷键可在顶部「快捷键」里修改）"
+        }
+    }
+
+    // MARK: - Tabs
+
+    func addCapturedImage(_ image: CGImage) {
+        let tab = EditorTab(sequence: nextSequence, image: image)
+        nextSequence += 1
+        tabs.append(tab)
+        undoByTab[tab.id] = UndoStack()
+        currentIndex = tabs.count - 1
+        selectedTool(.select)
+        refreshAll()
+        // Bring editor forward
+        view.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func selectTab(at index: Int) {
+        guard index >= 0, index < tabs.count else { return }
+        currentIndex = index
+        canvas.tab = tabs[index]
+        canvas.selectedAnnotation = nil
+        canvas.clearSelection()
+        canvas.style = style
+        refreshAll()
+    }
+
+    @objc private func tabClicked(_ sender: NSButton) {
+        selectTab(at: sender.tag)
+    }
+
+    @objc private func tabRightClicked(_ sender: NSButton) {
+        let index = sender.tag
+        let menu = NSMenu()
+        let close = NSMenuItem(title: "关闭", action: #selector(closeTabFromMenu(_:)), keyEquivalent: "")
+        close.target = self
+        close.representedObject = index
+        let save = NSMenuItem(title: "保存", action: #selector(saveTabFromMenu(_:)), keyEquivalent: "")
+        save.target = self
+        save.representedObject = index
+        menu.addItem(save)
+        menu.addItem(close)
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    @objc private func closeTabFromMenu(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int else { return }
+        requestCloseTab(at: index)
+    }
+
+    @objc private func saveTabFromMenu(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int else { return }
+        selectTab(at: index)
+        saveCurrentTab()
+    }
+
+    @objc private func newCaptureClicked() {
+        onCaptureRequest?()
+    }
+
+    @objc private func startCapture() {
+        onCaptureRequest?()
+    }
+
+    private func requestCloseTab(at index: Int) {
+        guard index >= 0, index < tabs.count else { return }
+        let tab = tabs[index]
+
+        // Unsaved check
+        let reallyUnsaved = (tab.savedURL == nil) || !tab.isSaved
+
+        if reallyUnsaved {
+            let alert = NSAlert()
+            alert.messageText = "尚未保存"
+            alert.informativeText = "「\(tab.displayTitle)」还没有保存，要保存吗？"
+            alert.addButton(withTitle: "保存")
+            alert.addButton(withTitle: "不保存")
+            alert.addButton(withTitle: "取消")
+            let resp = alert.runModal()
+            if resp == .alertFirstButtonReturn {
+                selectTab(at: index)
+                saveCurrentTab()
+                // If still unsaved (user cancelled save dialog), abort close
+                if tabs.indices.contains(index), !tabs[index].isSaved {
+                    return
+                }
+            } else if resp == .alertThirdButtonReturn {
+                return
+            }
+        }
+
+        tabs.remove(at: index)
+        if let id = tab.id as UUID? {
+            undoByTab.removeValue(forKey: id)
+        }
+        if tabs.isEmpty {
+            currentIndex = nil
+            canvas.tab = nil
+        } else {
+            currentIndex = min(index, tabs.count - 1)
+            canvas.tab = currentTab
+        }
+        refreshAll()
+    }
+
+    private func rebuildTabs() {
+        tabStrip.arrangedSubviews.forEach { $0.removeFromSuperview() }
+
+        for (i, tab) in tabs.enumerated() {
+            let btn = makeTabButton(title: tab.displayTitle, index: i, active: i == currentIndex)
+            tabStrip.addArrangedSubview(btn)
+        }
+
+        let newBtn = NSButton(title: "＋ 新截图", target: self, action: #selector(newCaptureClicked))
+        newBtn.bezelStyle = .rounded
+        newBtn.font = .systemFont(ofSize: 12)
+        tabStrip.addArrangedSubview(newBtn)
+    }
+
+    private func makeTabButton(title: String, index: Int, active: Bool) -> NSButton {
+        let btn = NSButton(title: title, target: self, action: #selector(tabClicked(_:)))
+        btn.bezelStyle = .rounded
+        btn.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
+        btn.tag = index
+        if active {
+            btn.contentTintColor = Theme.accent
+            btn.bezelColor = Theme.accent
+        }
+
+        // Right click
+        let menu = NSMenu()
+        let close = NSMenuItem(title: "关闭", action: #selector(closeTabFromMenu(_:)), keyEquivalent: "")
+        close.target = self
+        close.representedObject = index
+        let save = NSMenuItem(title: "保存", action: #selector(saveTabFromMenu(_:)), keyEquivalent: "")
+        save.target = self
+        save.representedObject = index
+        menu.addItem(save)
+        menu.addItem(close)
+        btn.menu = menu
+
+        return btn
+    }
+
+    // MARK: - Tools
+
+    @objc private func toolClicked(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue, let tool = ToolKind(rawValue: id) else { return }
+        selectedTool(tool)
+    }
+
+    func selectedTool(_ tool: ToolKind, preserveSelection: Bool = false) {
+        style.tool = tool
+        canvas.style = style
+        for (t, btn) in toolButtons {
+            btn.state = (t == tool) ? .on : .off
+        }
+        if !preserveSelection {
+            canvas.commitSelectedPasteIfAny()
+            canvas.clearSelection()
+            canvas.selectedAnnotation = nil
+        }
+        // Keep first responder on canvas so drawing shortcuts work immediately.
+        if canvas.tab != nil {
+            view.window?.makeFirstResponder(canvas)
+        }
+        // Number tool: open the value menu right away on the sidebar button.
+        if tool == .number, !preserveSelection, let btn = toolButtons[.number] {
+            showNumberMenu(from: btn)
+        }
+        refreshStatus()
+    }
+
+    private func showNumberMenu(from button: NSButton) {
+        let menu = NSMenu()
+        for i in 1...20 {
+            let item = NSMenuItem(title: AnnotationRenderer.numberString(i), action: #selector(numberMenuItemClicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = i
+            if i == style.numberValue {
+                item.state = .on
+            }
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.maxX + 4, y: button.bounds.maxY), in: button)
+    }
+
+    @objc private func numberMenuItemClicked(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? Int else { return }
+        style.numberValue = value
+        canvas.style = style
+        toolButtons[.number]?.toolTip = "序号（当前 \(AnnotationRenderer.numberString(value))）"
+        // Keep number tool active after picking a value.
+        if style.tool != .number {
+            selectedTool(.number, preserveSelection: true)
+        }
+    }
+
+    // MARK: - Actions
+
+    @objc private func applyMosaic() {
+        // Apply first — switching tools clears the selection.
+        let hadSelection = canvas.selectionRect.width > 2 && canvas.selectionRect.height > 2
+        canvas.applyMosaicToSelection()
+        if style.tool != .select {
+            selectedTool(.select, preserveSelection: true)
+        }
+        if !hadSelection {
+            let a = NSAlert()
+            a.messageText = "请先框选区域"
+            a.informativeText = "用「选择」工具在图上拖一个框，再点「马赛克」打码。"
+            a.runModal()
+        }
+    }
+
+    @objc private func colorWellChanged() {
+        style.color = colorWell.color
+        canvas.style = style
+        if canvas.selectedAnnotation != nil {
+            canvas.applyCurrentStyleToSelected()
+        }
+    }
+
+    @objc private func showSettingsPanel() {
+        guard view.window != nil else { return }
+        let panel = SettingsPanel(
+            hotkeyDisplay: HotkeyService.shared.displayString,
+            mosaic: style.mosaicCell,
+            thickness: style.lineWidth
+        ) { [weak self] hotkey, mosaic, thickness in
+            guard let self else { return }
+            if let (key, mods) = hotkey {
+                HotkeyService.shared.register(keyCode: key, modifiers: mods)
+            } else {
+                let cur = HotkeyService.shared.currentHotkey
+                HotkeyService.shared.register(keyCode: cur.keyCode, modifiers: cur.modifiers)
+            }
+            self.applyShortcutHints()
+            self.style.mosaicCell = mosaic
+            self.style.lineWidth = thickness
+            self.canvas.style = self.style
+            if self.canvas.selectedAnnotation != nil {
+                self.canvas.applyCurrentStyleToSelected()
+            }
+        }
+        // Present on the window's content VC — more reliable than self.presentAsSheet
+        // when this VC is a plain contentViewController.
+        if let host = view.window?.contentViewController, host !== self {
+            host.presentAsSheet(panel)
+        } else {
+            presentAsSheet(panel)
+        }
+    }
+
+    @objc private func doUndo() {
+        guard let tab = currentTab, let stack = undoByTab[tab.id] else { return }
+        if let prev = stack.undo(current: tab.annotations) {
+            tab.annotations = prev.map { $0.copyAnnotation() }
+            // copyAnnotation doesn't deep-copy kind images well - store refs
+            // Actually we need proper snapshot. Fix: store the array of Annotation references before mutation.
+            canvas.selectedAnnotation = nil
+            canvas.tab = tab
+            canvas.needsDisplay = true
+            refreshStatus()
+            refreshTabs()
+        }
+    }
+
+    @objc private func doRedo() {
+        guard let tab = currentTab, let stack = undoByTab[tab.id] else { return }
+        if let next = stack.redo(current: tab.annotations) {
+            tab.annotations = next
+            canvas.selectedAnnotation = nil
+            canvas.tab = tab
+            canvas.needsDisplay = true
+            refreshStatus()
+            refreshTabs()
+        }
+    }
+
+    private func pushUndoForCurrent() {
+        guard let tab = currentTab else { return }
+        let stack = undoByTab[tab.id] ?? {
+            let s = UndoStack()
+            undoByTab[tab.id] = s
+            return s
+        }()
+        // Deep-ish snapshot: new array with copied Annotation objects
+        let snapshot = tab.annotations.map { $0.copyAnnotation() }
+        stack.push(snapshot)
+    }
+
+    // MARK: - Copy / Paste / Save
+
+    func copySelection() {
+        canvas.copySelectionToClipboard()
+    }
+
+    func paste() {
+        canvas.pasteFromClipboard()
+    }
+
+    func saveCurrentTab() {
+        guard let tab = currentTab else { return }
+        guard let image = tab.renderComposite() else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "另存为"
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.nameFieldStringValue = tab.displayTitle
+        panel.canCreateDirectories = true
+        panel.showsTagField = false
+
+        panel.beginSheetModal(for: view.window!) { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            let isJPG = url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg"
+            let flattened = ScreenCaptureService.flatten(image, fillWhite: isJPG) ?? image
+            do {
+                try ImageIOExporter.save(flattened, to: url, as: isJPG ? .jpeg : .png)
+                tab.markSaved(url: url)
+                self.refreshTabs()
+                self.refreshStatus()
+            } catch {
+                let a = NSAlert()
+                a.messageText = "保存失败"
+                a.informativeText = error.localizedDescription
+                a.runModal()
+            }
+        }
+    }
+
+    // MARK: - Text panel
+
+    private func showTextPanel(at point: CGPoint) {
+        guard currentTab != nil else { return }
+        let panel = TextInsertPanel(defaultColor: style.color) { [weak self] content, size, color, bold, opaque in
+            guard let self else { return }
+            self.style.color = color
+            self.colorWell.color = color
+            self.canvas.style = self.style
+            self.canvas.insertText(origin: point, content: content, fontSize: size, bold: bold, opaque: opaque)
+        }
+        presentAsSheet(panel)
+    }
+
+    private func showTextEditPanel(for ann: Annotation) {
+        guard case .text(_, let content, let fontSize, let bold, let opaque) = ann.kind else { return }
+        let panel = TextInsertPanel(
+            defaultColor: ann.color,
+            content: content,
+            fontSize: fontSize,
+            bold: bold,
+            opaqueBackground: opaque
+        ) { [weak self] content2, size, color, bold2, opaque2 in
+            guard let self else { return }
+            ann.color = color
+            self.canvas.updateText(annotation: ann, content: content2, fontSize: size, bold: bold2, opaque: opaque2)
+        }
+        presentAsSheet(panel)
+    }
+
+    // MARK: - Refresh
+
+    private func refreshAll() {
+        canvas.tab = currentTab
+        canvas.style = style
+        rebuildTabs()
+        refreshEmptyState()
+        refreshStatus()
+        refreshTabs()
+    }
+
+    private func refreshTabs() {
+        // Update titles without full rebuild if possible
+        rebuildTabs()
+    }
+
+    private func refreshEmptyState() {
+        let isEmpty = tabs.isEmpty
+        emptyState.isHidden = !isEmpty
+        scroll.isHidden = isEmpty
+        applyShortcutHints()
+    }
+
+    private func refreshStatus(selection: CGRect? = nil) {
+        if let tab = currentTab {
+            let size = tab.pixelSize
+            let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            let logicalW = Int((size.width / scale).rounded())
+            let logicalH = Int((size.height / scale).rounded())
+            var text = "图片 \(Int(size.width)) × \(Int(size.height)) 像素    显示 \(logicalW) × \(logicalH) 点（1:1，不放大）"
+            if let sel = selection, sel.width > 1 {
+                text += "    选区 \(Int(sel.width)) × \(Int(sel.height))"
+            }
+            statusLabel.stringValue = text
+        } else {
+            statusLabel.stringValue = "还没有截图"
+        }
+    }
+
+    // MARK: - Keyboard
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let cmd = flags.contains(.command)
+
+        if cmd && event.charactersIgnoringModifiers == "c" {
+            copySelection()
+            return
+        }
+        if cmd && event.charactersIgnoringModifiers == "v" {
+            paste()
+            return
+        }
+        if cmd && event.charactersIgnoringModifiers == "z" {
+            if flags.contains(.shift) {
+                doRedo()
+            } else {
+                doUndo()
+            }
+            return
+        }
+        if cmd && event.charactersIgnoringModifiers == "y" {
+            doRedo()
+            return
+        }
+        if cmd && event.charactersIgnoringModifiers == "s" {
+            saveCurrentTab()
+            return
+        }
+        if event.keyCode == 51 || event.keyCode == 117 {
+            canvas.deleteSelected()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}

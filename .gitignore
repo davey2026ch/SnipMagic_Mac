@@ -1,0 +1,22 @@
+# Xcode / SwiftPM
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors
+*.swp
+*~
+
+# Local secrets / env
+.env
+.env.*
+
+# Optional: uncomment to ignore built app
+# dist/

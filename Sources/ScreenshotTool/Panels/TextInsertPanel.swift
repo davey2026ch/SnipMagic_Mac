@@ -12,7 +12,11 @@ final class TextInsertPanel: NSViewController {
 
     private let textView = NSTextView()
     private let sizeField = NSTextField()
-    private let colorWell = NSColorWell()
+    /// Borderless swatch — same color UX as the sidebar tool button: opens the
+    /// custom color panel (wheel + fullscreen eyedropper), not NSColorWell.
+    private let colorSwatch = ColorSwatchButton()
+    private var colorPanel: ColorPickerPanel?
+    private var pickedColor: NSColor
     private let boldCheck = NSButton(checkboxWithTitle: "加粗", target: nil, action: nil)
     private let transparentCheck = NSButton(checkboxWithTitle: "背景透明", target: nil, action: nil)
 
@@ -25,6 +29,7 @@ final class TextInsertPanel: NSViewController {
         onConfirm: @escaping (String, CGFloat, NSColor, Bool, Bool) -> Void
     ) {
         self.defaultColor = defaultColor
+        self.pickedColor = defaultColor
         self.initialContent = content
         self.initialSize = fontSize
         self.initialBold = bold
@@ -98,17 +103,20 @@ final class TextInsertPanel: NSViewController {
         colorRow.spacing = 10
         let cl = NSTextField(labelWithString: "颜色")
         cl.font = .systemFont(ofSize: 13)
-        colorWell.color = defaultColor
-        colorWell.translatesAutoresizingMaskIntoConstraints = false
-        colorWell.widthAnchor.constraint(equalToConstant: 40).isActive = true
-        colorWell.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        colorSwatch.color = defaultColor
+        colorSwatch.target = self
+        colorSwatch.action = #selector(colorSwatchClicked)
+        colorSwatch.translatesAutoresizingMaskIntoConstraints = false
+        colorSwatch.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        colorSwatch.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        colorSwatch.toolTip = "文字颜色（彩色圆盘 / RGB / HEX / 屏幕取色）"
         boldCheck.font = .systemFont(ofSize: 13)
         transparentCheck.font = .systemFont(ofSize: 13)
         boldCheck.state = initialBold ? .on : .off
         // 「背景透明」勾选 = 不要白色底。默认透明。
         transparentCheck.state = initialOpaqueBackground ? .off : .on
         colorRow.addArrangedSubview(cl)
-        colorRow.addArrangedSubview(colorWell)
+        colorRow.addArrangedSubview(colorSwatch)
         colorRow.addArrangedSubview(boldCheck)
         colorRow.addArrangedSubview(transparentCheck)
         colorRow.addArrangedSubview(NSView())
@@ -129,6 +137,24 @@ final class TextInsertPanel: NSViewController {
 
     }
 
+    /// Same flow as the sidebar color button: custom wheel panel, eyedropper
+    /// picks apply immediately, the swatch and pickedColor stay in sync.
+    @objc private func colorSwatchClicked() {
+        if let existing = colorPanel, let w = existing.view.window {
+            w.makeKeyAndOrderFront(nil)
+            return
+        }
+        let panel = ColorPickerPanel(initial: pickedColor) { [weak self] color in
+            guard let self else { return }
+            self.pickedColor = color
+            self.colorSwatch.color = color
+        }
+        colorPanel = panel
+        panel.show(relativeTo: view) { [weak self] in
+            self?.colorPanel = nil
+        }
+    }
+
     @objc private func okClicked() {
         let content = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else {
@@ -138,7 +164,7 @@ final class TextInsertPanel: NSViewController {
         let size = max(8, min(200, sizeField.doubleValue))
         // 勾选「背景透明」→ 不铺白底（opaqueBackground = false）
         let opaqueBackground = transparentCheck.state != .on
-        onConfirm(content, CGFloat(size), colorWell.color, boldCheck.state == .on, opaqueBackground)
+        onConfirm(content, CGFloat(size), pickedColor, boldCheck.state == .on, opaqueBackground)
         dismiss(nil)
     }
 

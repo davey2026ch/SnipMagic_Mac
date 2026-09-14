@@ -12,7 +12,8 @@ final class ZoomableScrollView: NSScrollView {
     var onZoom: ((CGFloat) -> Void)?
 
     private func handleWheelZoom(deltaY: CGFloat) {
-        let factor: CGFloat = deltaY > 0 ? 1.1 : 1 / 1.1
+        // User preference: wheel up (away) = zoom out, wheel down (toward) = zoom in.
+        let factor: CGFloat = deltaY > 0 ? 1 / 1.1 : 1.1
         performZoom(factor: factor)
     }
 

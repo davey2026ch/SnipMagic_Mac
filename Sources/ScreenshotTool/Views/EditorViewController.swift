@@ -852,7 +852,11 @@ final class EditorViewController: NSViewController {
         let compare = NSMenuItem(title: "与当前页签对比", action: #selector(compareTabFromMenu(_:)), keyEquivalent: "")
         compare.target = self
         compare.representedObject = index
+        let saveAll = NSMenuItem(title: "全部保存", action: #selector(saveAllTabs), keyEquivalent: "")
+        saveAll.target = self
+        saveAll.toolTip = "将全部页签导出为 PNG"
         menu.addItem(save)
+        menu.addItem(saveAll)
         menu.addItem(compare)
         menu.addItem(close)
         chip.tabButton.menu = menu

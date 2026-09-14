@@ -31,6 +31,7 @@ final class EditorViewController: NSViewController {
     private var ocrProgressPanel: NSPanel?
 
     var onCaptureRequest: (() -> Void)?
+    var onLongCaptureRequest: (() -> Void)?
 
     private var currentTab: EditorTab? {
         guard let i = currentIndex, i >= 0, i < tabs.count else { return nil }
@@ -148,6 +149,8 @@ final class EditorViewController: NSViewController {
         ])
 
         let captureBtn = makePrimaryButton("开始截图", action: #selector(startCapture))
+        let longCaptureBtn = makePrimaryButton("长截图", icon: "arrow.up.and.down", action: #selector(startLongCapture))
+        longCaptureBtn.toolTip = "框选区域后滚动页面（网页/文档），自动拼接为长图"
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
         extractTextBtn = makeToolButton(OCRMode.text.buttonTitle, action: #selector(extractTextClicked))
@@ -158,7 +161,7 @@ final class EditorViewController: NSViewController {
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, mosaicBtn, extractTextBtn, extractTableBtn, settingsBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractTextBtn, extractTableBtn, settingsBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -350,8 +353,8 @@ final class EditorViewController: NSViewController {
     }
 
     /// Soft sky-blue primary action with white label/icon.
-    private func makePrimaryButton(_ title: String, action: Selector) -> NSButton {
-        CapturePrimaryButton(title: title, target: self, action: action)
+    private func makePrimaryButton(_ title: String, icon: String = "viewfinder", action: Selector) -> NSButton {
+        CapturePrimaryButton(title: title, icon: icon, target: self, action: action)
     }
 
     private func makeCaption(_ text: String) -> NSTextField {
@@ -395,8 +398,8 @@ final class EditorViewController: NSViewController {
 
     // MARK: - Tabs
 
-    func addCapturedImage(_ image: CGImage) {
-        let tab = EditorTab(sequence: nextSequence, image: image)
+    func addCapturedImage(_ image: CGImage, title: String? = nil) {
+        let tab = EditorTab(sequence: nextSequence, image: image, title: title)
         nextSequence += 1
         tabs.append(tab)
         undoByTab[tab.id] = UndoStack()
@@ -453,6 +456,10 @@ final class EditorViewController: NSViewController {
 
     @objc private func startCapture() {
         onCaptureRequest?()
+    }
+
+    @objc private func startLongCapture() {
+        onLongCaptureRequest?()
     }
 
     private func requestCloseTab(at index: Int) {

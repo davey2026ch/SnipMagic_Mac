@@ -5,6 +5,7 @@ final class TrayService {
 
     private var statusItem: NSStatusItem?
     var onCapture: (() -> Void)?
+    var onLongCapture: (() -> Void)?
     var onOpenEditor: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -27,6 +28,11 @@ final class TrayService {
         captureItem.target = self
         menu.addItem(captureItem)
 
+        let longItem = NSMenuItem(title: "长截图（滚动拼接）", action: #selector(handleLongCapture), keyEquivalent: "l")
+        longItem.keyEquivalentModifierMask = [.command, .shift]
+        longItem.target = self
+        menu.addItem(longItem)
+
         let openItem = NSMenuItem(title: "打开编辑窗口", action: #selector(handleOpen), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
@@ -43,6 +49,7 @@ final class TrayService {
     }
 
     @objc private func handleCapture() { onCapture?() }
+    @objc private func handleLongCapture() { onLongCapture?() }
     @objc private func handleOpen() { onOpenEditor?() }
     @objc private func handleQuit() { onQuit?() }
 }

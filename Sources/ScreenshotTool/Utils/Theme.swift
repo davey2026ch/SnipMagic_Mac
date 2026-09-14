@@ -31,17 +31,17 @@ final class CapturePrimaryButton: NSButton {
     private let titleLabel = NSTextField(labelWithString: "")
     private let stack = NSStackView()
 
-    init(title: String, target: AnyObject?, action: Selector?) {
+    init(title: String, icon: String = "viewfinder", target: AnyObject?, action: Selector?) {
         super.init(frame: .zero)
         self.target = target
         self.action = action
-        configure(title: title)
+        configure(title: title, icon: icon)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func configure(title: String) {
+    private func configure(title: String, icon: String) {
         // Clear NSButton's own title — otherwise the default "Button"/「按钮」
         // is still drawn under our custom icon+label stack.
         self.title = ""
@@ -55,7 +55,7 @@ final class CapturePrimaryButton: NSButton {
         iconView.contentTintColor = .white
         iconView.translatesAutoresizingMaskIntoConstraints = false
         if #available(macOS 11.0, *) {
-            iconView.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: title)?
+            iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: title)?
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
         }
 

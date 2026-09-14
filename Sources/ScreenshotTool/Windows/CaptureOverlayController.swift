@@ -1,8 +1,22 @@
 import AppKit
 
+/// What the overlay should do once the user finishes dragging a selection.
+enum CaptureMode {
+    /// Classic behavior: crop the selection and hand the image to the editor.
+    case region
+    /// Long-screenshot behavior: lock the selected region for scroll stitching.
+    case longScreenshot
+}
+
 protocol CaptureOverlayDelegate: AnyObject {
     func captureOverlayDidCancel(_ overlay: CaptureOverlayController)
     func captureOverlay(_ overlay: CaptureOverlayController, didCapture image: CGImage, on screen: NSScreen)
+    /// Called in `.longScreenshot` mode: region is in global screen coordinates.
+    func captureOverlay(_ overlay: CaptureOverlayController, didSelectRegion region: CGRect, on screen: NSScreen)
+}
+
+extension CaptureOverlayDelegate {
+    func captureOverlay(_ overlay: CaptureOverlayController, didSelectRegion region: CGRect, on screen: NSScreen) {}
 }
 
 final class CaptureOverlayController: NSWindowController {
@@ -11,6 +25,7 @@ final class CaptureOverlayController: NSWindowController {
     private var selectionRect: CGRect = .zero
     private var dragOrigin: CGPoint?
     private var localMonitor: Any?
+    private let mode: CaptureMode
 
     weak var overlayDelegate: CaptureOverlayDelegate?
 
@@ -18,9 +33,10 @@ final class CaptureOverlayController: NSWindowController {
         window!.contentView as! OverlayView
     }
 
-    init(screen: NSScreen, image: CGImage) {
+    init(screen: NSScreen, image: CGImage, mode: CaptureMode = .region) {
         self.screen = screen
         self.screenImage = image
+        self.mode = mode
         let frame = screen.frame
         let window = OverlayWindow(
             contentRect: frame,
@@ -39,6 +55,9 @@ final class CaptureOverlayController: NSWindowController {
 
         let view = OverlayView(frame: NSRect(origin: .zero, size: frame.size))
         view.screenImage = image
+        view.hintText = mode == .longScreenshot
+            ? "框选要长截图的区域（之后滚动页面即可） · Esc 取消"
+            : "拖动框选要截取的区域 · Esc 取消"
         view.onMouseDown = { [weak self] p in self?.handleDown(p) }
         view.onMouseDrag = { [weak self] p in self?.handleDrag(p) }
         view.onMouseUp = { [weak self] p in self?.handleUp(p) }
@@ -131,7 +150,18 @@ final class CaptureOverlayController: NSWindowController {
             return
         }
         cleanup()
-        overlayDelegate?.captureOverlay(self, didCapture: cropped, on: screen)
+        if mode == .longScreenshot {
+            // Hand the locked region (global coords) to the long-capture session.
+            let global = CGRect(
+                x: screen.frame.origin.x + viewRect.origin.x,
+                y: screen.frame.origin.y + viewRect.origin.y,
+                width: viewRect.width,
+                height: viewRect.height
+            )
+            overlayDelegate?.captureOverlay(self, didSelectRegion: global, on: screen)
+        } else {
+            overlayDelegate?.captureOverlay(self, didCapture: cropped, on: screen)
+        }
         close()
     }
 }
@@ -143,6 +173,7 @@ final class OverlayWindow: NSWindow {
 
 final class OverlayView: NSView {
     var screenImage: CGImage?
+    var hintText = "拖动框选要截取的区域 · Esc 取消"
     var selection: CGRect = .zero {
         didSet { needsDisplay = true }
     }
@@ -205,8 +236,7 @@ final class OverlayView: NSView {
 
             drawLabel(pixelLabel(selection), at: selection)
         } else {
-            let hint = "拖动框选要截取的区域 · Esc 取消"
-            drawBadge(hint, at: CGPoint(x: bounds.midX, y: bounds.midY + 50))
+            drawBadge(hintText, at: CGPoint(x: bounds.midX, y: bounds.midY + 50))
         }
     }
 

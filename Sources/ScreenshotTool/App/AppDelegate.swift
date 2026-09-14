@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editorWindow: EditorWindowController!
     private var captureOverlay: CaptureOverlayController?
+    private var longSession: LongCaptureSessionController?
     private var permissionGuide: PermissionGuideWindowController?
     private var launchAtLoginObserver: DefaultsObserver?
 
@@ -18,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         TrayService.shared.onCapture = { [weak self] in
             self?.beginCapture()
+        }
+        TrayService.shared.onLongCapture = { [weak self] in
+            self?.beginLongCapture()
         }
         TrayService.shared.onOpenEditor = { [weak self] in
             self?.editorWindow.showAndActivate()
@@ -34,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         editorWindow.editorVC.onCaptureRequest = { [weak self] in
             self?.beginCapture()
+        }
+        editorWindow.editorVC.onLongCaptureRequest = { [weak self] in
+            self?.beginLongCapture()
         }
 
         // Show editor on launch
@@ -103,6 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureItem.keyEquivalentModifierMask = [.command, .shift]
         captureItem.target = self
         fileMenu.addItem(captureItem)
+        let longCaptureItem = NSMenuItem(title: "长截图（滚动拼接）", action: #selector(menuLongCapture), keyEquivalent: "l")
+        longCaptureItem.keyEquivalentModifierMask = [.command, .shift]
+        longCaptureItem.target = self
+        fileMenu.addItem(longCaptureItem)
         let saveItem = NSMenuItem(title: "保存…", action: #selector(menuSave), keyEquivalent: "s")
         saveItem.target = self
         fileMenu.addItem(saveItem)
@@ -113,6 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuCapture() {
         beginCapture()
+    }
+
+    @objc private func menuLongCapture() {
+        beginLongCapture()
     }
 
     @objc private func menuSave() {
@@ -221,6 +236,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func restoreEditorIfNeeded() {
         editorWindow.showAndActivate()
     }
+
+    // MARK: - Long capture flow
+
+    func beginLongCapture() {
+        // Re-entry guards
+        if let existing = captureOverlay {
+            existing.cancel()
+            captureOverlay = nil
+        }
+        if let session = longSession {
+            session.cancel()
+            longSession = nil
+        }
+
+        guard ScreenCaptureService.shared.hasScreenPermission else {
+            requestScreenPermissionAndGuide()
+            return
+        }
+
+        let mouse = NSEvent.mouseLocation
+        editorWindow.window?.orderOut(nil)
+
+        Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 120_000_000)
+                let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main!
+                // No cursor: the overlay shows this frame as its backdrop and a
+                // frozen cursor would be misleading.
+                let image = try await ScreenCaptureService.shared.capture(
+                    screen: screen,
+                    excludingWindowNumbers: [],
+                    showsCursor: false
+                )
+
+                let overlay = CaptureOverlayController(screen: screen, image: image, mode: .longScreenshot)
+                overlay.overlayDelegate = self
+                self.captureOverlay = overlay
+                overlay.present()
+            } catch {
+                self.editorWindow.showAndActivate()
+                let a = NSAlert()
+                a.messageText = "长截图启动失败"
+                a.informativeText = error.localizedDescription
+                a.runModal()
+            }
+        }
+    }
 }
 
 extension AppDelegate: CaptureOverlayDelegate {
@@ -237,6 +299,28 @@ extension AppDelegate: CaptureOverlayDelegate {
         captureOverlay = nil
         editorWindow.showAndActivate()
         editorWindow.editorVC.addCapturedImage(image)
+    }
+
+    func captureOverlay(_ overlay: CaptureOverlayController, didSelectRegion region: CGRect, on screen: NSScreen) {
+        captureOverlay = nil
+        let session = LongCaptureSessionController(screen: screen, region: region)
+        longSession = session
+        session.start(delegate: self)
+    }
+}
+
+extension AppDelegate: LongCaptureSessionDelegate {
+    func longCaptureSession(_ session: LongCaptureSessionController, didFinish image: CGImage) {
+        longSession = nil
+        editorWindow.showAndActivate()
+        editorWindow.editorVC.addCapturedImage(image, title: "长截图")
+    }
+
+    func longCaptureSessionDidCancel(_ session: LongCaptureSessionController) {
+        longSession = nil
+        if editorWindow.window?.isVisible != true {
+            editorWindow.showAndActivate()
+        }
     }
 }
 

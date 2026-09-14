@@ -9,10 +9,10 @@ final class EditorTab {
     var savedURL: URL?
     private(set) var sequence: Int
 
-    init(sequence: Int, image: CGImage) {
+    init(sequence: Int, image: CGImage, title: String? = nil) {
         self.id = UUID()
         self.sequence = sequence
-        self.title = "P\(sequence)"
+        self.title = title ?? "P\(sequence)"
         self.baseImage = image
         self.annotations = []
         self.isSaved = false

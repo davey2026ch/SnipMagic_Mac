@@ -73,19 +73,36 @@ final class ScreenCaptureService {
     }
 
     func capture(screen: NSScreen) async throws -> CGImage {
+        try await capture(screen: screen, excludingWindowNumbers: [], showsCursor: true)
+    }
+
+    /// Capture with the option to exclude our own windows (long-screenshot UI)
+    /// and to hide the cursor (frame pixels must stay stable for stitching).
+    func capture(screen: NSScreen, excludingWindowNumbers numbers: [Int], showsCursor: Bool) async throws -> CGImage {
         guard hasScreenPermission else { throw CaptureError.permissionDenied }
 
-        let filter = try await contentFilter(for: screen)
+        let filter = try await contentFilter(for: screen, excludingWindowNumbers: numbers)
         let config = SCStreamConfiguration()
         // Native pixel size of the display
         config.width = Int(screen.frame.width * screen.backingScaleFactor)
         config.height = Int(screen.frame.height * screen.backingScaleFactor)
-        config.showsCursor = true
+        config.showsCursor = showsCursor
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.colorSpaceName = CGColorSpace.sRGB
 
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         return image
+    }
+
+    private func contentFilter(for screen: NSScreen, excludingWindowNumbers numbers: [Int]) async throws -> SCContentFilter {
+        guard !numbers.isEmpty else { return try await contentFilter(for: screen) }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard let display = display(for: screen, in: content.displays) else {
+            throw CaptureError.noDisplay
+        }
+        let ids = Set(numbers.map { UInt32(bitPattern: Int32($0)) })
+        let excluded = content.windows.filter { ids.contains($0.windowID) }
+        return SCContentFilter(display: display, excludingWindows: excluded)
     }
 
     private func contentFilter(for screen: NSScreen) async throws -> SCContentFilter {

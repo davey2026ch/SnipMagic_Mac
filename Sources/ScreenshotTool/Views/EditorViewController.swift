@@ -183,7 +183,7 @@ final class EditorViewController: NSViewController {
         extractTableBtn.toolTip = "OCR 识别当前页签图片中的表格（有选区则只识别选区）"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
         let saveAllBtn = makeToolButton("💾 全部保存", action: #selector(saveAllTabs))
-        saveAllBtn.toolTip = "将全部页签导出为 PNG 到指定文件夹（当前页签单张保存用 ⌘S）"
+        saveAllBtn.toolTip = "将全部页签导出到指定文件夹（文件类型可选，默认 JPEG；当前页签单张保存用 ⌘S）"
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
@@ -1194,16 +1194,54 @@ final class EditorViewController: NSViewController {
         canvas.pasteFromClipboard()
     }
 
+    /// Accessory view with a file-type popup for save panels. Default JPEG
+    /// (user preference); PNG is the lossless alternative.
+    private func makeSaveFormatAccessory() -> (view: NSView, popup: NSPopUpButton) {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItem(withTitle: "JPEG 图片（.jpg，文件小）")
+        popup.addItem(withTitle: "PNG 图片（.png，无损）")
+        popup.selectItem(at: 0)
+        popup.target = self
+        popup.action = #selector(saveFormatPopupChanged(_:))
+        popup.setContentHuggingPriority(.required, for: .horizontal)
+
+        let label = NSTextField(labelWithString: "文件类型：")
+        let stack = NSStackView(views: [label, popup])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
+        return (stack, popup)
+    }
+
+    /// Keep the save panel's filename extension / the open panel's message in
+    /// sync with the file-type popup selection.
+    @objc private func saveFormatPopupChanged(_ sender: NSPopUpButton) {
+        let isPNG = sender.indexOfSelectedItem == 1
+        if let savePanel = sender.window as? NSSavePanel {
+            savePanel.allowedContentTypes = [isPNG ? .png : .jpeg]
+            let base = (savePanel.nameFieldStringValue as NSString).deletingPathExtension
+            if !base.isEmpty {
+                savePanel.nameFieldStringValue = "\(base).\(isPNG ? "png" : "jpg")"
+            }
+        } else if let openPanel = sender.window as? NSOpenPanel {
+            let count = sender.tag
+            openPanel.message = "选择保存位置，\(count) 个页签将以 \(isPNG ? "PNG" : "JPEG") 格式保存"
+        }
+    }
+
     func saveCurrentTab() {
         guard let tab = currentTab else { return }
         guard let image = tab.renderComposite() else { return }
 
         let panel = NSSavePanel()
         panel.title = "另存为"
-        panel.allowedContentTypes = [.jpeg, .png]
+        // Single type (JPEG default) → no built-in format popup; the accessory
+        // view owns the type choice and updates allowedContentTypes on change.
+        panel.allowedContentTypes = [.jpeg]
         panel.nameFieldStringValue = tab.displayTitle
         panel.canCreateDirectories = true
         panel.showsTagField = false
+        panel.accessoryView = makeSaveFormatAccessory().view
 
         panel.beginSheetModal(for: view.window!) { resp in
             guard resp == .OK, let url = panel.url else { return }
@@ -1223,8 +1261,9 @@ final class EditorViewController: NSViewController {
         }
     }
 
-    /// Save every tab as PNG into a user-chosen folder. Filenames come from
-    /// tab titles (deduplicated); failures are collected and reported.
+    /// Save every tab into a user-chosen folder (JPEG by default, PNG optional
+    /// via the file-type popup). Filenames come from tab titles (deduplicated);
+    /// failures are collected and reported.
     @objc private func saveAllTabs() {
         guard !tabs.isEmpty else {
             let a = NSAlert()
@@ -1236,13 +1275,17 @@ final class EditorViewController: NSViewController {
 
         let panel = NSOpenPanel()
         panel.title = "全部保存"
-        panel.message = "选择保存位置，\(tabs.count) 个页签将以 PNG 格式保存"
+        panel.message = "选择保存位置，\(tabs.count) 个页签将以 JPEG 格式保存"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
+        let accessory = makeSaveFormatAccessory()
+        accessory.popup.tag = tabs.count
+        panel.accessoryView = accessory.view
 
         panel.beginSheetModal(for: view.window!) { resp in
             guard resp == .OK, let dir = panel.url else { return }
+            let isPNG = accessory.popup.indexOfSelectedItem == 1
             var savedCount = 0
             var failedTitles: [String] = []
             var usedNames = Set<String>()
@@ -1260,9 +1303,11 @@ final class EditorViewController: NSViewController {
                     n += 1
                 }
                 usedNames.insert(name.lowercased())
-                let url = dir.appendingPathComponent("\(name).png")
+                let url = dir.appendingPathComponent("\(name).\(isPNG ? "png" : "jpg")")
                 do {
-                    try ImageIOExporter.save(image, to: url, as: .png)
+                    // JPEG has no alpha — flatten onto white first.
+                    let out = isPNG ? image : (ScreenCaptureService.flatten(image, fillWhite: true) ?? image)
+                    try ImageIOExporter.save(out, to: url, as: isPNG ? .png : .jpeg)
                     tab.markSaved(url: url)
                     savedCount += 1
                 } catch {

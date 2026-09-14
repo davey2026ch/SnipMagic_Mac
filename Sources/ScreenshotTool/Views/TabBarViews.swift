@@ -66,7 +66,8 @@ final class TabChipView: NSView {
 
     init(title: String, index: Int, active: Bool, comparing: Bool) {
         let highlighted = active || comparing
-        tabButton = DraggableTabButton(title: "   \(title)   ", target: nil, action: nil)
+        // Trailing spaces reserve room for the ✕ overlay on the active chip.
+        tabButton = DraggableTabButton(title: "   \(title)      ", target: nil, action: nil)
         tabButton.tag = index
         tabButton.isBordered = false
         tabButton.wantsLayer = true
@@ -75,12 +76,12 @@ final class TabChipView: NSView {
             : (comparing ? Theme.accent.withAlphaComponent(0.82) : NSColor.controlBackgroundColor)).cgColor
         // Top-corners-only rounding → adjacent chips form a tab strip,
         // visually "rooted" in the strip's bottom hairline.
-        tabButton.layer?.cornerRadius = 7
+        tabButton.layer?.cornerRadius = 6
         tabButton.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         tabButton.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
         tabButton.layer?.borderWidth = 0.5
         tabButton.contentTintColor = highlighted ? .white : .labelColor
-        tabButton.font = .systemFont(ofSize: 13, weight: active ? .semibold : .regular)
+        tabButton.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
 
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -101,7 +102,7 @@ final class TabChipView: NSView {
         NSLayoutConstraint.activate([
             // Fixed chip height — NSStackView alone would keep the tiny
             // intrinsic button height, which looked cramped.
-            heightAnchor.constraint(equalToConstant: 34),
+            heightAnchor.constraint(equalToConstant: 28),
 
             // Button fills the whole chip so neighbouring chips touch edge-to-edge.
             tabButton.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -109,11 +110,11 @@ final class TabChipView: NSView {
             tabButton.topAnchor.constraint(equalTo: topAnchor),
             tabButton.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            // ✕ overlays the button's top-right corner (no layout width).
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
-            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 3),
-            closeButton.widthAnchor.constraint(equalToConstant: 16),
-            closeButton.heightAnchor.constraint(equalToConstant: 16),
+            // ✕ vertically centered inside the trailing title padding.
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 14),
+            closeButton.heightAnchor.constraint(equalToConstant: 14),
         ])
     }
 
@@ -121,12 +122,20 @@ final class TabChipView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-// MARK: - Flipped image view
+// MARK: - Flipped views
 
 /// NSImageView anchored at the top-left (flipped). The left pane's CanvasView
 /// is flipped too, so during compare mode both panes share the same anchor —
 /// without this the right image hugs the bottom of its scroll view and looks
 /// vertically misaligned.
 final class FlippedImageView: NSImageView {
+    override var isFlipped: Bool { true }
+}
+
+/// Plain flipped container used as the compare pane's document view. It wraps
+/// the image with the same 28pt padding the left canvas uses, so the right
+/// image lines up with the left one (top margin included) and scroll-sync
+/// math stays symmetric.
+final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }

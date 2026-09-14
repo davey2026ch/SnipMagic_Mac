@@ -23,6 +23,7 @@ final class EditorViewController: NSViewController {
 
     // Side-by-side compare mode (drag a tab onto the right half of the canvas)
     private let compareScroll = NSScrollView()
+    private let compareContainer = FlippedView()
     private let compareImageView = FlippedImageView()
     private let compareExitButton = NSButton(title: "✕ 退出对比", target: nil, action: nil)
     private let compareDivider = NSView()
@@ -289,9 +290,14 @@ final class EditorViewController: NSViewController {
         compareScroll.isHidden = true
         bodyContainer.addSubview(compareScroll)
 
+        // Right pane document mirrors the left canvas: the image sits inside a
+        // 28pt-padded container, so it keeps the same top/side margins as the
+        // left image and stays visually aligned.
         compareImageView.imageScaling = .scaleNone
-        compareImageView.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
-        compareScroll.documentView = compareImageView
+        compareImageView.frame = NSRect(x: 28, y: 28, width: 100, height: 100)
+        compareContainer.addSubview(compareImageView)
+        compareContainer.frame = NSRect(x: 0, y: 0, width: 156, height: 156)
+        compareScroll.documentView = compareContainer
         compareScroll.contentView.postsBoundsChangedNotifications = true
 
         compareDivider.translatesAutoresizingMaskIntoConstraints = false
@@ -301,12 +307,14 @@ final class EditorViewController: NSViewController {
         bodyContainer.addSubview(compareDivider)
 
         // Floating controls sit above the panes.
+        compareExitButton.title = "  ✕  退出对比  "
         compareExitButton.bezelStyle = .rounded
-        compareExitButton.font = .systemFont(ofSize: 12, weight: .medium)
+        compareExitButton.font = .systemFont(ofSize: 13, weight: .medium)
         compareExitButton.toolTip = "退出左右对比模式"
         compareExitButton.target = self
         compareExitButton.action = #selector(exitCompare)
         compareExitButton.translatesAutoresizingMaskIntoConstraints = false
+        compareExitButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
         compareExitButton.isHidden = true
         bodyContainer.addSubview(compareExitButton)
 
@@ -490,7 +498,11 @@ final class EditorViewController: NSViewController {
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let size = NSSize(width: CGFloat(composite.width) / scale, height: CGFloat(composite.height) / scale)
         compareImageView.image = NSImage(cgImage: composite, size: size)
-        compareImageView.frame = NSRect(origin: .zero, size: size)
+        compareImageView.frame = NSRect(x: 28, y: 28, width: size.width, height: size.height)
+        compareContainer.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: size.width + 56, height: size.height + 56)
+        )
     }
 
     /// Proportional scroll sync between the two panes (same fraction of max offset).
@@ -521,7 +533,7 @@ final class EditorViewController: NSViewController {
         tabStrip.orientation = .horizontal
         tabStrip.spacing = 0
         tabStrip.alignment = .centerY
-        tabStrip.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
+        tabStrip.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabContainer.addSubview(tabStrip)
         NSLayoutConstraint.activate([
@@ -684,10 +696,6 @@ final class EditorViewController: NSViewController {
         saveCurrentTab()
     }
 
-    @objc private func newCaptureClicked() {
-        onCaptureRequest?()
-    }
-
     @objc private func startCapture() {
         onCaptureRequest?()
     }
@@ -753,16 +761,6 @@ final class EditorViewController: NSViewController {
             )
             tabStrip.addArrangedSubview(chip)
         }
-
-        let spacer = NSView(frame: .zero)
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.widthAnchor.constraint(equalToConstant: 8).isActive = true
-        tabStrip.addArrangedSubview(spacer)
-
-        let newBtn = NSButton(title: "＋ 新截图", target: self, action: #selector(newCaptureClicked))
-        newBtn.bezelStyle = .rounded
-        newBtn.font = .systemFont(ofSize: 12)
-        tabStrip.addArrangedSubview(newBtn)
     }
 
     private func makeTabChip(title: String, index: Int, active: Bool, comparing: Bool) -> TabChipView {

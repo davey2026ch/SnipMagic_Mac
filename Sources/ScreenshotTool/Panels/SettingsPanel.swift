@@ -53,13 +53,25 @@ final class SettingsPanel: NSViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Packaging timestamp = the app executable's modification date. In a
+    /// distributed .app this is exactly when the bundle was built/signed.
+    private static var buildTimestamp: String {
+        if let url = Bundle.main.executableURL,
+           let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd HH:mm"
+            return df.string(from: date)
+        }
+        return "—"
+    }
+
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 344))
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        preferredContentSize = NSSize(width: 480, height: 320)
+        preferredContentSize = NSSize(width: 480, height: 344)
 
         configureHotkeyButton(hotkeyButton, action: #selector(hotkeyButtonClicked))
         configureHotkeyButton(longHotkeyButton, action: #selector(longHotkeyButtonClicked))
@@ -106,7 +118,13 @@ final class SettingsPanel: NSViewController {
         buttonRow.spacing = 8
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let root = NSStackView(views: [title, grid, tip, buttonRow])
+        // Version / build-time footer.
+        let versionLine = NSTextField(labelWithString: "版本 \(AppInfo.version)　·　打包于 \(Self.buildTimestamp)")
+        versionLine.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        versionLine.textColor = .tertiaryLabelColor
+        versionLine.translatesAutoresizingMaskIntoConstraints = false
+
+        let root = NSStackView(views: [title, grid, tip, buttonRow, versionLine])
         root.orientation = .vertical
         root.alignment = .leading
         root.distribution = .fill

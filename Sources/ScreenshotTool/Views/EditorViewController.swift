@@ -23,7 +23,7 @@ final class EditorViewController: NSViewController {
 
     // Side-by-side compare mode (drag a tab onto the right half of the canvas)
     private let compareScroll = NSScrollView()
-    private let compareImageView = NSImageView()
+    private let compareImageView = FlippedImageView()
     private let compareExitButton = NSButton(title: "✕ 退出对比", target: nil, action: nil)
     private let compareDivider = NSView()
     private let compareHint = NSView()
@@ -521,7 +521,7 @@ final class EditorViewController: NSViewController {
         tabStrip.orientation = .horizontal
         tabStrip.spacing = 0
         tabStrip.alignment = .centerY
-        tabStrip.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        tabStrip.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabContainer.addSubview(tabStrip)
         NSLayoutConstraint.activate([
@@ -529,6 +529,19 @@ final class EditorViewController: NSViewController {
             tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: tabContainer.trailingAnchor),
             tabStrip.topAnchor.constraint(equalTo: tabContainer.topAnchor),
             tabStrip.bottomAnchor.constraint(equalTo: tabContainer.bottomAnchor)
+        ])
+
+        // Hairline under the strip — tabs visually "root" into it.
+        let hairline = NSView()
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        hairline.wantsLayer = true
+        hairline.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        tabContainer.addSubview(hairline)
+        NSLayoutConstraint.activate([
+            hairline.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor),
+            hairline.trailingAnchor.constraint(equalTo: tabContainer.trailingAnchor),
+            hairline.bottomAnchor.constraint(equalTo: tabContainer.bottomAnchor),
+            hairline.heightAnchor.constraint(equalToConstant: 1)
         ])
     }
 

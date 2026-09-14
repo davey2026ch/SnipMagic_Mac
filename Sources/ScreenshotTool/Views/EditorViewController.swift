@@ -24,6 +24,11 @@ final class EditorViewController: NSViewController {
     private var sidebarButtons: [NSButton] = []
     private var toolButtons: [ToolKind: NSButton] = [:]
     private var keyMonitor: Any?
+    private var extractTextBtn = NSButton()
+    private var extractTableBtn = NSButton()
+    private var isOCRRunning = false
+    private var ocrProgressIndicator: NSProgressIndicator?
+    private var ocrProgressPanel: NSPanel?
 
     var onCaptureRequest: (() -> Void)?
 
@@ -145,11 +150,15 @@ final class EditorViewController: NSViewController {
         let captureBtn = makePrimaryButton("开始截图", action: #selector(startCapture))
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
+        extractTextBtn = makeToolButton(OCRMode.text.buttonTitle, action: #selector(extractTextClicked))
+        extractTableBtn = makeToolButton(OCRMode.table.buttonTitle, action: #selector(extractTableClicked))
+        extractTextBtn.toolTip = "OCR 识别当前页签图片中的文字（有选区则只识别选区）"
+        extractTableBtn.toolTip = "OCR 识别当前页签图片中的表格（有选区则只识别选区）"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, mosaicBtn, settingsBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, mosaicBtn, extractTextBtn, extractTableBtn, settingsBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -594,6 +603,149 @@ final class EditorViewController: NSViewController {
             a.messageText = "请先框选区域"
             a.informativeText = "用「选择」工具在图上拖一个框，再点「马赛克」打码。"
             a.runModal()
+        }
+    }
+
+    // MARK: - OCR (MinerU Agent)
+
+    @objc private func extractTextClicked() {
+        startOCR(mode: .text)
+    }
+
+    @objc private func extractTableClicked() {
+        startOCR(mode: .table)
+    }
+
+    private func startOCR(mode: OCRMode) {
+        guard !isOCRRunning else { return }
+        guard let tab = currentTab else {
+            let a = NSAlert()
+            a.messageText = "还没有截图"
+            a.informativeText = "先截一张图，再使用「\(mode.resultTitle)」。"
+            a.runModal()
+            return
+        }
+
+        let selection = canvas.selectionRect
+        let hasSelection = selection.width > 2 && selection.height > 2
+        let sourceImage: CGImage?
+        if hasSelection {
+            sourceImage = tab.renderRegion(selection)
+        } else {
+            sourceImage = tab.renderComposite()
+        }
+        guard let image = sourceImage, let png = MinerUOCRService.encodePNG(image) else {
+            let a = NSAlert()
+            a.messageText = "无法导出图片"
+            a.informativeText = "请重试，或先保存当前截图。"
+            a.runModal()
+            return
+        }
+
+        isOCRRunning = true
+        setOCRButtonsEnabled(false)
+        showOCRProgress(mode: mode, scopedToSelection: hasSelection)
+
+        MinerUOCRService.parse(imageData: png, mode: mode) { [weak self] result in
+            guard let self else { return }
+            self.isOCRRunning = false
+            self.setOCRButtonsEnabled(true)
+            self.hideOCRProgress()
+
+            switch result {
+            case .failure(let error):
+                let a = NSAlert()
+                a.messageText = "\(mode.resultTitle)失败"
+                a.informativeText = error.localizedDescription
+                a.runModal()
+            case .success(let text):
+                self.presentOCRResult(mode: mode, text: text)
+            }
+        }
+    }
+
+    private func setOCRButtonsEnabled(_ enabled: Bool) {
+        extractTextBtn.isEnabled = enabled
+        extractTableBtn.isEnabled = enabled
+    }
+
+    private func showOCRProgress(mode: OCRMode, scopedToSelection: Bool) {
+        hideOCRProgress()
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 120),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = ""
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isReleasedWhenClosed = false
+        panel.level = .floating
+        panel.isMovableByWindowBackground = true
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 120))
+        panel.contentView = container
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 10
+        stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16)
+        ])
+
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+        stack.addArrangedSubview(spinner)
+        ocrProgressIndicator = spinner
+
+        let label = NSTextField(labelWithString: "正在\(mode.resultTitle)…")
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.alignment = .center
+        stack.addArrangedSubview(label)
+
+        let sub = NSTextField(labelWithString: scopedToSelection ? "识别选区 · MinerU 轻量解析" : "识别整图 · MinerU 轻量解析")
+        sub.font = .systemFont(ofSize: 11)
+        sub.textColor = .secondaryLabelColor
+        sub.alignment = .center
+        stack.addArrangedSubview(sub)
+
+        if let window = view.window {
+            panel.center()
+            // Anchor near editor without stealing key focus.
+            if let screen = window.screen ?? NSScreen.main {
+                let frame = panel.frame
+                panel.setFrameOrigin(NSPoint(
+                    x: screen.visibleFrame.midX - frame.width / 2,
+                    y: screen.visibleFrame.midY - frame.height / 2 + 40
+                ))
+            }
+        }
+        panel.orderFrontRegardless()
+        ocrProgressPanel = panel
+    }
+
+    private func hideOCRProgress() {
+        ocrProgressIndicator?.stopAnimation(nil)
+        ocrProgressIndicator = nil
+        ocrProgressPanel?.orderOut(nil)
+        ocrProgressPanel = nil
+    }
+
+    private func presentOCRResult(mode: OCRMode, text: String) {
+        let panel = OCRResultPanel(mode: mode, content: text)
+        if let host = view.window?.contentViewController, host !== self {
+            host.presentAsSheet(panel)
+        } else {
+            presentAsSheet(panel)
         }
     }
 

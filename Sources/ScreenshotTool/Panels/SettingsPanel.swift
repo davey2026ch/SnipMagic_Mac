@@ -265,7 +265,7 @@ final class SettingsPanel: NSViewController {
     @objc private func resetHotkey() {
         stopRecording(restoreGlobalHotkeys: false)
         pendingHotkey = (UInt32(kVK_ANSI_R), UInt32(cmdKey | shiftKey))
-        pendingLongHotkey = (UInt32(kVK_ANSI_G), UInt32(cmdKey | shiftKey))
+        pendingLongHotkey = (UInt32(kVK_ANSI_L), UInt32(cmdKey | shiftKey))
         currentHotkeyText = HotkeyService.displayStringDefault
         currentLongHotkeyText = HotkeyService.displayStringDefaultLong
         updateHotkeyButtonTitles()

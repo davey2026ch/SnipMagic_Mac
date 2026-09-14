@@ -16,10 +16,24 @@ final class EditorViewController: NSViewController {
     private let tabStrip = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "还没有截图")
     private let hintLabel = NSTextField(labelWithString: "")
-    private let scroll = NSScrollView()
+    private let scroll = EditorScrollView()
     private let canvas = CanvasView()
     private let emptyState = NSView()
     private let colorWell = NSColorWell()
+
+    // Side-by-side compare mode (drag a tab onto the right half of the canvas)
+    private let compareScroll = EditorScrollView()
+    private let compareImageView = NSImageView()
+    private let compareExitButton = NSButton(title: "✕ 退出对比", target: nil, action: nil)
+    private let compareDivider = NSView()
+    private let compareHint = NSView()
+    private let compareHintLabel = NSTextField(labelWithString: "松开鼠标：与当前页签左右对比")
+    private var compareTabID: UUID?
+    private var compareRenderStamp: (annotationCount: Int, baseImage: CGImage)?
+    private var scrollSyncPaused = false
+    private var scrollObservers: [NSObjectProtocol] = []
+    private var normalTrailingConstraint: NSLayoutConstraint!
+    private var compareConstraints: [NSLayoutConstraint] = []
 
     private var sidebarButtons: [NSButton] = []
     private var toolButtons: [ToolKind: NSButton] = [:]
@@ -59,6 +73,7 @@ final class EditorViewController: NSViewController {
 
     deinit {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        scrollObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     private func installKeyMonitor() {
@@ -262,6 +277,50 @@ final class EditorViewController: NSViewController {
         scroll.documentView = canvas
         scroll.contentView.postsBoundsChangedNotifications = true
 
+        // Right compare pane (hidden until a tab is dragged onto the right half).
+        compareScroll.translatesAutoresizingMaskIntoConstraints = false
+        compareScroll.hasVerticalScroller = true
+        compareScroll.hasHorizontalScroller = true
+        compareScroll.borderType = .noBorder
+        compareScroll.drawsBackground = true
+        compareScroll.backgroundColor = Theme.canvasBackground
+        compareScroll.automaticallyAdjustsContentInsets = false
+        compareScroll.isHidden = true
+        bodyContainer.addSubview(compareScroll)
+
+        compareImageView.imageScaling = .scaleNone
+        compareImageView.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        compareScroll.documentView = compareImageView
+        compareScroll.contentView.postsBoundsChangedNotifications = true
+
+        compareDivider.translatesAutoresizingMaskIntoConstraints = false
+        compareDivider.wantsLayer = true
+        compareDivider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        compareDivider.isHidden = true
+        bodyContainer.addSubview(compareDivider)
+
+        // Floating controls sit above the panes.
+        compareExitButton.bezelStyle = .rounded
+        compareExitButton.font = .systemFont(ofSize: 12, weight: .medium)
+        compareExitButton.toolTip = "退出左右对比模式"
+        compareExitButton.target = self
+        compareExitButton.action = #selector(exitCompare)
+        compareExitButton.translatesAutoresizingMaskIntoConstraints = false
+        compareExitButton.isHidden = true
+        bodyContainer.addSubview(compareExitButton)
+
+        compareHint.translatesAutoresizingMaskIntoConstraints = false
+        compareHint.wantsLayer = true
+        compareHint.layer?.backgroundColor = Theme.accent.withAlphaComponent(0.12).cgColor
+        compareHint.layer?.borderColor = Theme.accent.withAlphaComponent(0.55).cgColor
+        compareHint.layer?.borderWidth = 1
+        compareHint.layer?.cornerRadius = 8
+        compareHint.isHidden = true
+        bodyContainer.addSubview(compareHint)
+        compareHintLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        compareHintLabel.translatesAutoresizingMaskIntoConstraints = false
+        compareHint.addSubview(compareHintLabel)
+
         // Empty state
         emptyState.translatesAutoresizingMaskIntoConstraints = false
         emptyState.wantsLayer = true
@@ -278,21 +337,181 @@ final class EditorViewController: NSViewController {
         ])
         emptyLabel.tag = 99
 
+        // Normal layout: canvas scroll spans the full body width. Compare mode
+        // swaps this single trailing constraint for the split-pane set.
+        normalTrailingConstraint = scroll.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor)
+        let compareConstraints: [NSLayoutConstraint] = [
+            compareScroll.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 1),
+            compareScroll.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            compareScroll.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            compareScroll.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+            compareScroll.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            compareDivider.leadingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            compareDivider.widthAnchor.constraint(equalToConstant: 1),
+            compareDivider.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            compareDivider.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+        ]
+        self.compareConstraints = compareConstraints
+
         NSLayoutConstraint.activate([
             sidebar.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
             sidebar.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
 
             scroll.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
 
             emptyState.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             emptyState.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             emptyState.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
-            emptyState.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor)
+            emptyState.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+
+            compareExitButton.topAnchor.constraint(equalTo: bodyContainer.topAnchor, constant: 10),
+            compareExitButton.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor, constant: -12),
+
+            compareHint.leadingAnchor.constraint(equalTo: bodyContainer.centerXAnchor, constant: 12),
+            compareHint.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor, constant: -12),
+            compareHint.topAnchor.constraint(equalTo: bodyContainer.topAnchor, constant: 12),
+            compareHint.heightAnchor.constraint(equalToConstant: 44),
+            compareHintLabel.centerXAnchor.constraint(equalTo: compareHint.centerXAnchor),
+            compareHintLabel.centerYAnchor.constraint(equalTo: compareHint.centerYAnchor)
         ])
+        normalTrailingConstraint.isActive = true
+
+        setupCompareDragAndSync()
+    }
+
+    // MARK: - Compare mode
+
+    private func setupCompareDragAndSync() {
+        scroll.registerForDraggedTypes([DraggableTabButton.dragType])
+        compareScroll.registerForDraggedTypes([DraggableTabButton.dragType])
+
+        // Left pane: dropping on the right half starts a compare session.
+        scroll.dragFeedback = { [weak self] info in
+            guard let self, self.compareTabID == nil else { return [] }
+            let p = self.scroll.convert(info.draggingLocation, from: nil)
+            let inRight = p.x >= self.scroll.bounds.width / 2
+            self.setCompareHintVisible(inRight)
+            return inRight ? .copy : []
+        }
+        scroll.dragExited = { [weak self] _ in
+            self?.setCompareHintVisible(false)
+        }
+        scroll.dropHandler = { [weak self] info in
+            guard let self, self.compareTabID == nil else { return false }
+            self.setCompareHintVisible(false)
+            guard let idx = self.draggedTabIndex(info), idx != self.currentIndex else { return false }
+            let p = self.scroll.convert(info.draggingLocation, from: nil)
+            guard p.x >= self.scroll.bounds.width / 2 else { return false }
+            self.enterCompare(tabIndex: idx)
+            return true
+        }
+
+        // While comparing, dropping another tab on the right pane replaces it.
+        compareScroll.dragFeedback = { [weak self] _ in
+            self?.compareTabID != nil ? .copy : []
+        }
+        compareScroll.dropHandler = { [weak self] info in
+            guard let self, self.compareTabID != nil,
+                  let idx = self.draggedTabIndex(info), idx != self.currentIndex else { return false }
+            self.enterCompare(tabIndex: idx)
+            return true
+        }
+
+        // Bidirectional proportional scroll sync.
+        scrollObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.syncScroll(from: self.scroll, to: self.compareScroll)
+            },
+            NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: compareScroll.contentView, queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.syncScroll(from: self.compareScroll, to: self.scroll)
+            }
+        ]
+    }
+
+    private func setCompareHintVisible(_ visible: Bool) {
+        compareHint.isHidden = !visible
+    }
+
+    private func draggedTabIndex(_ info: NSDraggingInfo) -> Int? {
+        guard let s = info.draggingPasteboard.string(forType: DraggableTabButton.dragType),
+              let idx = Int(s) else { return nil }
+        return tabs.indices.contains(idx) ? idx : nil
+    }
+
+    private func enterCompare(tabIndex: Int) {
+        guard let current = currentTab, tabs.indices.contains(tabIndex) else { return }
+        let target = tabs[tabIndex]
+        guard target.id != current.id else { return }
+
+        compareTabID = target.id
+        refreshCompareImage(force: true)
+        compareScroll.isHidden = false
+        compareDivider.isHidden = false
+        compareExitButton.isHidden = false
+
+        NSLayoutConstraint.deactivate([normalTrailingConstraint])
+        NSLayoutConstraint.activate(compareConstraints)
+        view.layoutSubtreeIfNeeded()
+
+        syncScroll(from: scroll, to: compareScroll)
+        refreshTabs()
+        refreshStatus()
+    }
+
+    @objc private func exitCompare() {
+        guard compareTabID != nil else { return }
+        compareTabID = nil
+        compareRenderStamp = nil
+        compareScroll.isHidden = true
+        compareDivider.isHidden = true
+        compareExitButton.isHidden = true
+        NSLayoutConstraint.deactivate(compareConstraints)
+        normalTrailingConstraint.isActive = true
+        refreshTabs()
+        refreshStatus()
+    }
+
+    /// Re-render the right pane when its tab's content changed (count or baked base).
+    private func refreshCompareImage(force: Bool = false) {
+        guard let id = compareTabID,
+              let tab = tabs.first(where: { $0.id == id }) else { return }
+        let sameStamp = compareRenderStamp?.annotationCount == tab.annotations.count
+            && compareRenderStamp?.baseImage === tab.baseImage
+        if !force, sameStamp { return }
+        guard let composite = tab.renderComposite() else { return }
+        compareRenderStamp = (annotationCount: tab.annotations.count, baseImage: tab.baseImage)
+        let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let size = NSSize(width: CGFloat(composite.width) / scale, height: CGFloat(composite.height) / scale)
+        compareImageView.image = NSImage(cgImage: composite, size: size)
+        compareImageView.frame = NSRect(origin: .zero, size: size)
+    }
+
+    /// Proportional scroll sync between the two panes (same fraction of max offset).
+    private func syncScroll(from src: NSScrollView, to dst: NSScrollView) {
+        guard compareTabID != nil, !scrollSyncPaused else { return }
+        guard let srcDoc = src.documentView, let dstDoc = dst.documentView else { return }
+        scrollSyncPaused = true
+        defer { scrollSyncPaused = false }
+
+        let srcBounds = src.contentView.bounds
+        let dstBounds = dst.contentView.bounds
+        let srcMaxX = max(0, srcDoc.frame.width - srcBounds.width)
+        let srcMaxY = max(0, srcDoc.frame.height - srcBounds.height)
+        let dstMaxX = max(0, dstDoc.frame.width - dstBounds.width)
+        let dstMaxY = max(0, dstDoc.frame.height - dstBounds.height)
+        let fx = srcMaxX > 0 ? srcBounds.origin.x / srcMaxX : 0
+        let fy = srcMaxY > 0 ? srcBounds.origin.y / srcMaxY : 0
+        dst.contentView.scroll(to: NSPoint(x: fx * dstMaxX, y: fy * dstMaxY))
+        dst.reflectScrolledClipView(dst.contentView)
     }
 
     private func buildTabStrip() {
@@ -375,6 +594,7 @@ final class EditorViewController: NSViewController {
         canvas.onAnnotationsChanged = { [weak self] in
             self?.refreshStatus()
             self?.refreshTabs()
+            self?.refreshCompareImage()
         }
         canvas.onRequestTextInsert = { [weak self] point in
             self?.showTextPanel(at: point)
@@ -496,6 +716,10 @@ final class EditorViewController: NSViewController {
         if let id = tab.id as UUID? {
             undoByTab.removeValue(forKey: id)
         }
+        // If the tab shown on the compare pane was closed, leave compare mode.
+        if tab.id == compareTabID {
+            exitCompare()
+        }
         if tabs.isEmpty {
             currentIndex = nil
             canvas.tab = nil
@@ -510,8 +734,13 @@ final class EditorViewController: NSViewController {
         tabStrip.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
         for (i, tab) in tabs.enumerated() {
-            let btn = makeTabButton(title: tab.displayTitle, index: i, active: i == currentIndex)
-            tabStrip.addArrangedSubview(btn)
+            let chip = makeTabChip(
+                title: tab.displayTitle,
+                index: i,
+                active: i == currentIndex,
+                comparing: tab.id == compareTabID
+            )
+            tabStrip.addArrangedSubview(chip)
         }
 
         let newBtn = NSButton(title: "＋ 新截图", target: self, action: #selector(newCaptureClicked))
@@ -520,17 +749,13 @@ final class EditorViewController: NSViewController {
         tabStrip.addArrangedSubview(newBtn)
     }
 
-    private func makeTabButton(title: String, index: Int, active: Bool) -> NSButton {
-        let btn = NSButton(title: title, target: self, action: #selector(tabClicked(_:)))
-        btn.bezelStyle = .rounded
-        btn.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
-        btn.tag = index
-        if active {
-            btn.contentTintColor = Theme.accent
-            btn.bezelColor = Theme.accent
-        }
+    private func makeTabChip(title: String, index: Int, active: Bool, comparing: Bool) -> TabChipView {
+        let chip = TabChipView(title: title, index: index, active: active, comparing: comparing)
+        chip.tabButton.target = self
+        chip.tabButton.action = #selector(tabClicked(_:))
+        chip.closeButton.target = self
+        chip.closeButton.action = #selector(closeTabFromChip(_:))
 
-        // Right click
         let menu = NSMenu()
         let close = NSMenuItem(title: "关闭", action: #selector(closeTabFromMenu(_:)), keyEquivalent: "")
         close.target = self
@@ -538,11 +763,28 @@ final class EditorViewController: NSViewController {
         let save = NSMenuItem(title: "保存", action: #selector(saveTabFromMenu(_:)), keyEquivalent: "")
         save.target = self
         save.representedObject = index
+        let compare = NSMenuItem(title: "与当前页签对比", action: #selector(compareTabFromMenu(_:)), keyEquivalent: "")
+        compare.target = self
+        compare.representedObject = index
         menu.addItem(save)
+        menu.addItem(compare)
         menu.addItem(close)
-        btn.menu = menu
+        chip.tabButton.menu = menu
 
-        return btn
+        return chip
+    }
+
+    @objc private func closeTabFromChip(_ sender: NSButton) {
+        requestCloseTab(at: sender.tag)
+    }
+
+    @objc private func compareTabFromMenu(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int else { return }
+        if let id = tabs.indices.contains(index) ? tabs[index].id : nil, id == compareTabID {
+            exitCompare()
+        } else {
+            enterCompare(tabIndex: index)
+        }
     }
 
     // MARK: - Tools
@@ -1023,6 +1265,9 @@ final class EditorViewController: NSViewController {
             var text = "图片 \(Int(size.width)) × \(Int(size.height)) 像素    显示 \(logicalW) × \(logicalH) 点（1:1，不放大）"
             if let sel = selection, sel.width > 1 {
                 text += "    选区 \(Int(sel.width)) × \(Int(sel.height))"
+            }
+            if let cid = compareTabID, let ctab = tabs.first(where: { $0.id == cid }) {
+                text += "    对比中：\(ctab.displayTitle)"
             }
             statusLabel.stringValue = text
         } else {

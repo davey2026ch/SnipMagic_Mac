@@ -20,3 +20,10 @@ DerivedData/
 
 # Optional: uncomment to ignore built app
 # dist/
+
+# Built app bundle internals (dmg/zip releases stay tracked)
+dist/*.app
+dist/*.app/**
+
+# WorkBuddy local data
+.workbuddy/

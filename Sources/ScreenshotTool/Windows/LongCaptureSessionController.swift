@@ -250,7 +250,7 @@ final class LongCaptureSessionController {
     }
 
     private func refreshPreviewThrottled() {
-        guard let previewImageView else { return }
+        guard previewImageView != nil else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastPreviewAt >= 1.0 else { return }
         lastPreviewAt = now

@@ -8,7 +8,7 @@ BIN_NAME="ScreenshotTool"
 
 echo "==> Building (release)"
 cd "$ROOT"
-swift build -c release 2>&1
+swift build -c release --disable-sandbox 2>&1
 
 BIN="$ROOT/.build/release/$BIN_NAME"
 if [[ ! -f "$BIN" ]]; then

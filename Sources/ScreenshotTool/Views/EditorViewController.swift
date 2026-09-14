@@ -16,13 +16,13 @@ final class EditorViewController: NSViewController {
     private let tabStrip = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "还没有截图")
     private let hintLabel = NSTextField(labelWithString: "")
-    private let scroll = EditorScrollView()
+    private let scroll = NSScrollView()
     private let canvas = CanvasView()
     private let emptyState = NSView()
     private let colorWell = NSColorWell()
 
     // Side-by-side compare mode (drag a tab onto the right half of the canvas)
-    private let compareScroll = EditorScrollView()
+    private let compareScroll = NSScrollView()
     private let compareImageView = NSImageView()
     private let compareExitButton = NSButton(title: "✕ 退出对比", target: nil, action: nil)
     private let compareDivider = NSView()
@@ -34,6 +34,7 @@ final class EditorViewController: NSViewController {
     private var scrollObservers: [NSObjectProtocol] = []
     private var normalTrailingConstraint: NSLayoutConstraint!
     private var compareConstraints: [NSLayoutConstraint] = []
+    private var tabDragIndex: Int?
 
     private var sidebarButtons: [NSButton] = []
     private var toolButtons: [ToolKind: NSButton] = [:]
@@ -385,42 +386,7 @@ final class EditorViewController: NSViewController {
     // MARK: - Compare mode
 
     private func setupCompareDragAndSync() {
-        scroll.registerForDraggedTypes([DraggableTabButton.dragType])
-        compareScroll.registerForDraggedTypes([DraggableTabButton.dragType])
-
-        // Left pane: dropping on the right half starts a compare session.
-        scroll.dragFeedback = { [weak self] info in
-            guard let self, self.compareTabID == nil else { return [] }
-            let p = self.scroll.convert(info.draggingLocation, from: nil)
-            let inRight = p.x >= self.scroll.bounds.width / 2
-            self.setCompareHintVisible(inRight)
-            return inRight ? .copy : []
-        }
-        scroll.dragExited = { [weak self] _ in
-            self?.setCompareHintVisible(false)
-        }
-        scroll.dropHandler = { [weak self] info in
-            guard let self, self.compareTabID == nil else { return false }
-            self.setCompareHintVisible(false)
-            guard let idx = self.draggedTabIndex(info), idx != self.currentIndex else { return false }
-            let p = self.scroll.convert(info.draggingLocation, from: nil)
-            guard p.x >= self.scroll.bounds.width / 2 else { return false }
-            self.enterCompare(tabIndex: idx)
-            return true
-        }
-
-        // While comparing, dropping another tab on the right pane replaces it.
-        compareScroll.dragFeedback = { [weak self] _ in
-            self?.compareTabID != nil ? .copy : []
-        }
-        compareScroll.dropHandler = { [weak self] info in
-            guard let self, self.compareTabID != nil,
-                  let idx = self.draggedTabIndex(info), idx != self.currentIndex else { return false }
-            self.enterCompare(tabIndex: idx)
-            return true
-        }
-
-        // Bidirectional proportional scroll sync.
+        // Bidirectional proportional scroll sync between the two panes.
         scrollObservers = [
             NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
@@ -437,14 +403,46 @@ final class EditorViewController: NSViewController {
         ]
     }
 
-    private func setCompareHintVisible(_ visible: Bool) {
-        compareHint.isHidden = !visible
+    /// Manual drag tracking from a tab chip (no NSDragging machinery — the
+    /// event loop in DraggableTabButton drives this directly).
+    private func handleTabDrag(_ phase: DraggableTabButton.DragPhase, windowPoint: NSPoint, index: Int) {
+        switch phase {
+        case .began:
+            tabDragIndex = index
+        case .moved:
+            compareHintLabel.stringValue = compareTabID == nil
+                ? "松开鼠标：与当前页签左右对比"
+                : "松开鼠标：替换右侧对比图"
+            setCompareHintVisible(isValidCompareDrop(windowPoint: windowPoint))
+        case .ended:
+            setCompareHintVisible(false)
+            if let i = tabDragIndex, isValidCompareDrop(windowPoint: windowPoint), i != currentIndex {
+                enterCompare(tabIndex: i)
+            }
+            tabDragIndex = nil
+        case .cancelled:
+            setCompareHintVisible(false)
+            tabDragIndex = nil
+        }
     }
 
-    private func draggedTabIndex(_ info: NSDraggingInfo) -> Int? {
-        guard let s = info.draggingPasteboard.string(forType: DraggableTabButton.dragType),
-              let idx = Int(s) else { return nil }
-        return tabs.indices.contains(idx) ? idx : nil
+    /// Is the given window point a valid drop target for starting/replacing a
+    /// compare session? (Right half of the canvas pane, or the whole right
+    /// pane while already comparing.)
+    private func isValidCompareDrop(windowPoint: NSPoint) -> Bool {
+        guard let dragIndex = tabDragIndex, dragIndex != currentIndex,
+              tabs.indices.contains(dragIndex) else { return false }
+        let p = bodyContainer.convert(windowPoint, from: nil)
+        if compareTabID != nil {
+            return !compareScroll.isHidden && NSPointInRect(p, compareScroll.frame)
+        }
+        guard !scroll.isHidden else { return false }
+        let r = scroll.frame
+        return NSPointInRect(p, r) && p.x >= r.midX
+    }
+
+    private func setCompareHintVisible(_ visible: Bool) {
+        compareHint.isHidden = !visible
     }
 
     private func enterCompare(tabIndex: Int) {
@@ -521,9 +519,9 @@ final class EditorViewController: NSViewController {
         tabContainer.heightAnchor.constraint(equalToConstant: 44).isActive = true
 
         tabStrip.orientation = .horizontal
-        tabStrip.spacing = 8
+        tabStrip.spacing = 0
         tabStrip.alignment = .centerY
-        tabStrip.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        tabStrip.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabContainer.addSubview(tabStrip)
         NSLayoutConstraint.activate([
@@ -742,6 +740,11 @@ final class EditorViewController: NSViewController {
             )
             tabStrip.addArrangedSubview(chip)
         }
+
+        let spacer = NSView(frame: .zero)
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.widthAnchor.constraint(equalToConstant: 8).isActive = true
+        tabStrip.addArrangedSubview(spacer)
 
         let newBtn = NSButton(title: "＋ 新截图", target: self, action: #selector(newCaptureClicked))
         newBtn.bezelStyle = .rounded

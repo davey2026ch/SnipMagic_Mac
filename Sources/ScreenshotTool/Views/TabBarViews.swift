@@ -3,95 +3,77 @@ import AppKit
 // MARK: - Draggable tab button
 
 /// Tab button that behaves like a normal click when released in place, and
-/// starts a drag session (for side-by-side compare) when the mouse moves
-/// more than a few points while held down.
-final class DraggableTabButton: NSButton, NSDraggingSource, NSPasteboardWriting {
-    static let dragType = NSPasteboard.PasteboardType("com.mimo.screenshottool.tab-drag")
+/// enters a manual drag-tracking mode when the mouse moves more than a few
+/// points while held down. The drag is tracked entirely in the event loop —
+/// no NSDraggingSession / pasteboard machinery, so the owner gets deterministic
+/// callbacks for every phase (all points in window coordinates).
+final class DraggableTabButton: NSButton {
+    enum DragPhase {
+        case began    // threshold passed, drag tracking started
+        case moved    // mouse moved while dragging
+        case ended    // mouse released while dragging
+        case cancelled
+    }
+
+    var onDrag: ((DragPhase, NSPoint) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         let start = event.locationInWindow
-        var dragged = false
+        var dragging = false
+
         while true {
-            guard let e = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { break }
-            if e.type == .leftMouseUp { break }
-            let dx = e.locationInWindow.x - start.x
-            let dy = e.locationInWindow.y - start.y
-            if !dragged && hypot(dx, dy) > 6 {
-                dragged = true
-                let item = NSDraggingItem(pasteboardWriter: self)
-                item.setDraggingFrame(bounds, contents: dragSnapshot())
-                beginDraggingSession(with: [item], event: event, source: self)
-                break
+            guard let e = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
+                if dragging {
+                    alphaValue = 1
+                    onDrag?(.cancelled, start)
+                } else {
+                    performClick(nil)
+                }
+                return
+            }
+            if e.type == .leftMouseUp {
+                if dragging {
+                    alphaValue = 1
+                    onDrag?(.ended, e.locationInWindow)
+                } else {
+                    performClick(nil)
+                }
+                return
+            }
+            let p = e.locationInWindow
+            if !dragging {
+                guard hypot(p.x - start.x, p.y - start.y) > 6 else { continue }
+                dragging = true
+                alphaValue = 0.4
+                onDrag?(.began, p)
+            } else {
+                onDrag?(.moved, p)
             }
         }
-        if !dragged {
-            performClick(nil)
-        }
-    }
-
-    private func dragSnapshot() -> NSImage {
-        let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: max(1, Int(bounds.width) * 2),
-            pixelsHigh: max(1, Int(bounds.height) * 2),
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ) ?? NSBitmapImageRep()
-        rep.size = bounds.size
-        cacheDisplay(in: bounds, to: rep)
-        let img = NSImage()
-        img.addRepresentation(rep)
-        return img
-    }
-
-    // MARK: NSDraggingSource
-
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        .copy
-    }
-
-    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
-        alphaValue = 0.35
-    }
-
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        alphaValue = 1
-    }
-
-    // MARK: NSPasteboardWriting
-
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        [Self.dragType]
-    }
-
-    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        "\(tag)"
     }
 }
 
 // MARK: - Tab chip
 
-/// A tab-strip chip: draggable title button + small close ✕ at the top-right
-/// corner (visible only on the active tab). Clicking ✕ asks to save when the
-/// tab has unsaved changes (handled by the owner via requestCloseTab).
+/// A tightly-packed Excel-style tab chip: a flat rectangular button filling the
+/// whole chip (active = accent background + white label, inactive = light gray
+/// with a hairline border), plus a small ✕ overlaid at the top-right corner of
+/// the *active* chip only (it does not consume layout width).
 final class TabChipView: NSView {
     let tabButton: DraggableTabButton
     let closeButton = NSButton(title: "✕", target: nil, action: nil)
 
     init(title: String, index: Int, active: Bool, comparing: Bool) {
-        tabButton = DraggableTabButton(title: title, target: nil, action: nil)
-        tabButton.bezelStyle = .rounded
-        tabButton.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
+        let highlighted = active || comparing
+        tabButton = DraggableTabButton(title: "  \(title)  ", target: nil, action: nil)
         tabButton.tag = index
-        if active || comparing {
-            tabButton.bezelColor = Theme.accent
-            tabButton.contentTintColor = .white
-        }
+        tabButton.isBordered = false
+        tabButton.wantsLayer = true
+        tabButton.layer?.backgroundColor = (highlighted ? Theme.accent : NSColor.controlBackgroundColor).cgColor
+        tabButton.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+        tabButton.layer?.borderWidth = 0.5
+        tabButton.contentTintColor = highlighted ? .white : .labelColor
+        tabButton.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
 
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -102,56 +84,28 @@ final class TabChipView: NSView {
 
         closeButton.tag = index
         closeButton.isBordered = false
-        closeButton.isTransparent = false
         closeButton.font = .systemFont(ofSize: 10, weight: .bold)
-        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.contentTintColor = highlighted ? .white : .secondaryLabelColor
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.isHidden = !active
         closeButton.toolTip = "关闭页签"
         addSubview(closeButton)
 
         NSLayoutConstraint.activate([
+            // Button fills the whole chip so neighbouring chips touch edge-to-edge.
             tabButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tabButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             tabButton.topAnchor.constraint(equalTo: topAnchor),
             tabButton.bottomAnchor.constraint(equalTo: bottomAnchor),
-            closeButton.leadingAnchor.constraint(equalTo: tabButton.trailingAnchor, constant: 0),
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 0),
-            closeButton.widthAnchor.constraint(equalToConstant: 16),
-            closeButton.heightAnchor.constraint(equalToConstant: 16),
+
+            // ✕ overlays the button's top-right corner (no layout width).
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3),
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 1),
+            closeButton.widthAnchor.constraint(equalToConstant: 15),
+            closeButton.heightAnchor.constraint(equalToConstant: 15),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
-}
-
-// MARK: - Drop-target scroll view
-
-/// NSScrollView that forwards drag-and-drop callbacks so the editor VC can
-/// implement "drag a tab to the right half to compare" without subclassing
-/// the canvas.
-final class EditorScrollView: NSScrollView {
-    var dragFeedback: ((NSDraggingInfo) -> NSDragOperation)?
-    var dragExited: ((NSDraggingInfo) -> Void)?
-    var dropHandler: ((NSDraggingInfo) -> Bool)?
-
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        dragFeedback?(sender) ?? []
-    }
-
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        dragFeedback?(sender) ?? []
-    }
-
-    override func draggingExited(_ sender: NSDraggingInfo?) {
-        if let sender { dragExited?(sender) }
-    }
-
-    /// Recent SDKs no longer expose performDrop as an overridable Swift method
-    /// on NSView; declaring it @objc still implements the NSDraggingDestination
-    /// optional method (ObjC dispatches by selector).
-    @objc func performDrop(_ sender: NSDraggingInfo) -> Bool {
-        dropHandler?(sender) ?? false
-    }
 }

@@ -28,7 +28,7 @@ final class TrayService {
         captureItem.target = self
         menu.addItem(captureItem)
 
-        let longItem = NSMenuItem(title: "长截图（滚动拼接）", action: #selector(handleLongCapture), keyEquivalent: "l")
+        let longItem = NSMenuItem(title: "长截图（滚动拼接）", action: #selector(handleLongCapture), keyEquivalent: "e")
         longItem.keyEquivalentModifierMask = [.command, .shift]
         longItem.target = self
         menu.addItem(longItem)

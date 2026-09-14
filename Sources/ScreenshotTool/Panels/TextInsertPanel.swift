@@ -283,6 +283,6 @@ extension HotkeyService {
     }
 
     static var displayStringDefaultLong: String {
-        format(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(cmdKey | shiftKey))
+        format(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(cmdKey | shiftKey))
     }
 }

@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureItem.keyEquivalentModifierMask = [.command, .shift]
         captureItem.target = self
         fileMenu.addItem(captureItem)
-        let longCaptureItem = NSMenuItem(title: "长截图（滚动拼接）", action: #selector(menuLongCapture), keyEquivalent: "l")
+        let longCaptureItem = NSMenuItem(title: "长截图（滚动拼接）", action: #selector(menuLongCapture), keyEquivalent: "e")
         longCaptureItem.keyEquivalentModifierMask = [.command, .shift]
         longCaptureItem.target = self
         fileMenu.addItem(longCaptureItem)

@@ -13,7 +13,7 @@ final class HotkeyService {
     private var longHotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
     private var current: (keyCode: UInt32, modifiers: UInt32) = (UInt32(kVK_ANSI_R), UInt32(cmdKey | shiftKey))
-    private var currentLong: (keyCode: UInt32, modifiers: UInt32) = (UInt32(kVK_ANSI_L), UInt32(cmdKey | shiftKey))
+    private var currentLong: (keyCode: UInt32, modifiers: UInt32) = (UInt32(kVK_ANSI_E), UInt32(cmdKey | shiftKey))
 
     private init() {}
 
@@ -35,7 +35,7 @@ final class HotkeyService {
 
     func registerDefault() {
         register(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | shiftKey))
-        registerLong(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(cmdKey | shiftKey))
+        registerLong(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(cmdKey | shiftKey))
     }
 
     func register(keyCode: UInt32, modifiers: UInt32) {

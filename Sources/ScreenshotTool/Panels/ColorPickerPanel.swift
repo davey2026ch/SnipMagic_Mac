@@ -1,10 +1,13 @@
 import AppKit
 
-/// Color panel: presets + RGB/alpha + eyedropper.
-final class ColorPickerPanel: NSViewController {
+/// Color panel: presets + RGB/alpha + fullscreen eyedropper. Picking a preset
+/// or eyedropping a color applies it immediately and closes the panel;
+/// sliders / HEX stay open for free adjustment until 确定.
+final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     private let initial: NSColor
     private let onPick: (NSColor) -> Void
     private var current: NSColor
+    private var onClose: (() -> Void)?
 
     private let preview = NSButton()
     private let rSlider = NSSlider()
@@ -21,8 +24,6 @@ final class ColorPickerPanel: NSViewController {
         .systemRed, .systemBlue, .systemGreen, .systemOrange, .black,
         .white, .systemPurple, .systemTeal, .systemGray, .systemYellow
     ]
-
-    private var eyedropperMonitor: Any?
 
     init(initial: NSColor, onPick: @escaping (NSColor) -> Void) {
         self.initial = initial
@@ -139,7 +140,7 @@ final class ColorPickerPanel: NSViewController {
         let buttons = NSStackView()
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        let eyedrop = NSButton(title: "吸管（从图上取色）", target: self, action: #selector(startEyedropper))
+        let eyedrop = NSButton(title: "吸管（屏幕任意位置取色）", target: self, action: #selector(startEyedropper))
         eyedrop.bezelStyle = .rounded
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelClicked))
         cancel.bezelStyle = .rounded
@@ -186,7 +187,21 @@ final class ColorPickerPanel: NSViewController {
 
     @objc private func presetClicked(_ sender: NSButton) {
         guard sender.tag >= 0 && sender.tag < presets.count else { return }
+        // A preset click is a complete color choice → apply and close.
         syncUI(from: presets[sender.tag])
+        applyCurrentAndClose()
+    }
+
+    /// Apply the current color and close the panel (preset clicks and
+    /// eyedropper picks). Slider/HEX adjustments still need 确定 since users
+    /// tweak them repeatedly.
+    private func applyCurrentAndClose() {
+        onPick(current)
+        closePanel()
+    }
+
+    private func closePanel() {
+        view.window?.close()
     }
 
     @objc private func sliderChanged() {
@@ -211,72 +226,37 @@ final class ColorPickerPanel: NSViewController {
         syncUI(from: NSColor(srgbRed: r, green: g, blue: b, alpha: CGFloat(aSlider.doubleValue / 100)))
     }
 
+    /// Fullscreen eyedropper: freeze the screen (panel hidden), pick any pixel
+    /// — current tab image, desktop wallpaper, other apps — then apply the
+    /// picked color and close this panel automatically.
     @objc private func startEyedropper() {
         view.window?.orderOut(nil)
-        NSCursor.crosshair.push()
-        eyedropperMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .mouseMoved]) { [weak self] event in
+        ScreenColorPicker.shared.begin { [weak self] color in
             guard let self else { return }
-            if event.type == .mouseMoved {
-                return
-            }
-            if let color = Self.screenColor(at: NSEvent.mouseLocation) {
-                self.syncUI(from: color)
-            }
-            self.stopEyedropper()
-            self.view.window?.makeKeyAndOrderFront(nil)
+            self.syncUI(from: color)
+            self.applyCurrentAndClose()
+        } onCancel: { [weak self] in
+            // Canceled → bring the panel back for manual adjustment.
+            self?.view.window?.makeKeyAndOrderFront(nil)
         }
-    }
-
-    private func stopEyedropper() {
-        if let eyedropperMonitor {
-            NSEvent.removeMonitor(eyedropperMonitor)
-            self.eyedropperMonitor = nil
-        }
-        NSCursor.pop()
-    }
-
-    static func screenColor(at globalPoint: NSPoint) -> NSColor? {
-        // Convert to CG global (top-left origin)
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(globalPoint) }) else {
-            return nil
-        }
-        let scale = screen.backingScaleFactor
-        let sx = (globalPoint.x - screen.frame.origin.x) * scale
-        let syFromTop = (screen.frame.maxY - globalPoint.y) * scale
-        // Capture 1x1
-        let rect = CGRect(x: sx, y: syFromTop, width: 1, height: 1)
-        guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
-        let displayID = CGDirectDisplayID(num.uint32Value)
-        guard let image = CGDisplayCreateImage(displayID) else { return nil }
-        guard let cropped = image.cropping(to: rect.integral.offsetBy(dx: 0, dy: 0)) else { return nil }
-
-        // Read pixel
-        let w = 1, h = 1
-        var pixel = [UInt8](repeating: 0, count: 4)
-        let ctx = CGContext(data: &pixel, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 4,
-                            space: CGColorSpaceCreateDeviceRGB(),
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        ctx?.draw(cropped, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        return NSColor(
-            srgbRed: CGFloat(pixel[0]) / 255,
-            green: CGFloat(pixel[1]) / 255,
-            blue: CGFloat(pixel[2]) / 255,
-            alpha: 1
-        )
     }
 
     @objc private func okClicked() {
-        stopEyedropper()
         onPick(current)
-        dismiss(nil)
+        closePanel()
     }
 
     @objc private func cancelClicked() {
-        stopEyedropper()
-        dismiss(nil)
+        closePanel()
     }
 
-    func show(relativeTo parent: NSView) {
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+        onClose = nil
+    }
+
+    func show(relativeTo parent: NSView, onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
         let window = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 420),
             styleMask: [.titled, .closable],
@@ -286,12 +266,12 @@ final class ColorPickerPanel: NSViewController {
         window.title = "颜色"
         window.contentViewController = self
         window.isReleasedWhenClosed = false
-        if let pw = parent.window, let screen = pw.screen ?? NSScreen.main {
+        window.delegate = self
+        if let pw = parent.window {
             let pwFrame = pw.frame
             let x = pwFrame.midX - 160
             let y = pwFrame.midY - 210
             window.setFrameOrigin(NSPoint(x: x, y: y))
-            _ = screen
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

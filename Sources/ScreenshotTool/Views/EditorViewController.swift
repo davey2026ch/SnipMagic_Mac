@@ -19,7 +19,10 @@ final class EditorViewController: NSViewController {
     private let scroll = ZoomableScrollView()
     private let canvas = CanvasView()
     private let emptyState = NSView()
-    private let colorWell = NSColorWell()
+    private let colorSwatch = ColorSwatchButton()
+    /// Strong reference to the open color panel (its window does not retain
+    /// it strongly enough to survive).
+    private var colorPanel: ColorPickerPanel?
 
     // Side-by-side compare mode (drag a tab onto the right half of the canvas)
     private let compareScroll = ZoomableScrollView()
@@ -292,19 +295,21 @@ final class EditorViewController: NSViewController {
         }
 
         // Color swatch at the very bottom of the tool sidebar, under the
-        // number tool — moved here from the top toolbar's right corner.
-        colorWell.color = style.color
-        colorWell.target = self
-        colorWell.action = #selector(colorWellChanged)
-        colorWell.translatesAutoresizingMaskIntoConstraints = false
-        colorWell.widthAnchor.constraint(equalToConstant: 36).isActive = true
-        colorWell.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        colorWell.toolTip = "画笔颜色"
+        // number tool. Borderless rounded fill (NSColorWell's black frame
+        // looked harsh); a click opens the custom color panel with presets,
+        // RGB/HEX and a fullscreen eyedropper.
+        colorSwatch.color = style.color
+        colorSwatch.target = self
+        colorSwatch.action = #selector(colorSwatchClicked)
+        colorSwatch.translatesAutoresizingMaskIntoConstraints = false
+        colorSwatch.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        colorSwatch.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        colorSwatch.toolTip = "画笔颜色（预设色 / RGB / HEX / 屏幕取色）"
         let colorGap = NSView()
         colorGap.translatesAutoresizingMaskIntoConstraints = false
         colorGap.heightAnchor.constraint(equalToConstant: 6).isActive = true
         sideStack.addArrangedSubview(colorGap)
-        sideStack.addArrangedSubview(colorWell)
+        sideStack.addArrangedSubview(colorSwatch)
 
         // Canvas area — documentView uses frame-based layout, not Auto Layout.
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -1087,11 +1092,24 @@ final class EditorViewController: NSViewController {
         }
     }
 
-    @objc private func colorWellChanged() {
-        style.color = colorWell.color
-        canvas.style = style
-        if canvas.selectedAnnotation != nil {
-            canvas.applyCurrentStyleToSelected()
+    @objc private func colorSwatchClicked() {
+        // Already open → just focus it.
+        if let existing = colorPanel, let w = existing.view.window {
+            w.makeKeyAndOrderFront(nil)
+            return
+        }
+        let panel = ColorPickerPanel(initial: style.color) { [weak self] color in
+            guard let self else { return }
+            self.style.color = color
+            self.colorSwatch.color = color
+            self.canvas.style = self.style
+            if self.canvas.selectedAnnotation != nil {
+                self.canvas.applyCurrentStyleToSelected()
+            }
+        }
+        colorPanel = panel
+        panel.show(relativeTo: view) { [weak self] in
+            self?.colorPanel = nil
         }
     }
 
@@ -1358,7 +1376,7 @@ final class EditorViewController: NSViewController {
         let panel = TextInsertPanel(defaultColor: style.color) { [weak self] content, size, color, bold, opaque in
             guard let self else { return }
             self.style.color = color
-            self.colorWell.color = color
+            self.colorSwatch.color = color
             self.canvas.style = self.style
             self.canvas.insertText(origin: point, content: content, fontSize: size, bold: bold, opaque: opaque)
         }

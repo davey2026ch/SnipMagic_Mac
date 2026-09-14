@@ -22,7 +22,29 @@ enum AppInfo {
     static let name = "截图工具"
     static let bundleID = "com.mimo.screenshottool"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "1.5.3"
+    static let version = "1.5.4"
+}
+
+/// Borderless color swatch: flat rounded fill in the current brush color, no
+/// frame. Replaces NSColorWell, whose black border looked harsh against the
+/// light sidebar. A click opens the custom color panel (not NSColorPanel).
+final class ColorSwatchButton: NSButton {
+    var color: NSColor = .systemRed {
+        didSet { layer?.backgroundColor = color.cgColor }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        isBordered = false
+        title = ""
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 0
+        layer?.backgroundColor = NSColor.systemRed.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 /// Primary toolbar action: system-blue fill (matches active tab), white icon + text, tight gap.

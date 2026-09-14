@@ -1,15 +1,17 @@
 import AppKit
 
-/// Color panel: presets + RGB/alpha + fullscreen eyedropper. Picking a preset
-/// or eyedropping a color applies it immediately and closes the panel;
-/// sliders / HEX stay open for free adjustment until 确定.
+/// Color panel: HSV color wheel + brightness, RGB/alpha sliders, HEX input,
+/// fullscreen eyedropper. Picking a preset or eyedropping a color applies it
+/// immediately and closes the panel; wheel/slider/HEX adjustments stay open
+/// until 确定.
 final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     private let initial: NSColor
     private let onPick: (NSColor) -> Void
     private var current: NSColor
     private var onClose: (() -> Void)?
 
-    private let preview = NSButton()
+    private let wheel = ColorWheelView()
+    private let vSlider = NSSlider()
     private let rSlider = NSSlider()
     private let gSlider = NSSlider()
     private let bSlider = NSSlider()
@@ -19,11 +21,6 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     private let bField = NSTextField()
     private let aField = NSTextField()
     private let hexField = NSTextField()
-
-    private let presets: [NSColor] = [
-        .systemRed, .systemBlue, .systemGreen, .systemOrange, .black,
-        .white, .systemPurple, .systemTeal, .systemGray, .systemYellow
-    ]
 
     init(initial: NSColor, onPick: @escaping (NSColor) -> Void) {
         self.initial = initial
@@ -36,7 +33,7 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 420))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 540))
     }
 
     override func viewDidLoad() {
@@ -63,37 +60,31 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         stack.addArrangedSubview(title)
 
-        // Presets
-        let presetStack = NSStackView()
-        presetStack.orientation = .horizontal
-        presetStack.spacing = 8
-        for c in presets {
-            let b = NSButton()
-            b.bezelStyle = .smallSquare
-            b.wantsLayer = true
-            b.layer?.backgroundColor = c.cgColor
-            b.layer?.cornerRadius = 4
-            b.layer?.borderWidth = 1
-            b.layer?.borderColor = NSColor.separatorColor.cgColor
-            b.translatesAutoresizingMaskIntoConstraints = false
-            b.widthAnchor.constraint(equalToConstant: 24).isActive = true
-            b.heightAnchor.constraint(equalToConstant: 24).isActive = true
-            b.target = self
-            b.action = #selector(presetClicked(_:))
-            b.identifier = NSUserInterfaceItemIdentifier("\(c.description)")
-            // store color via representedObject not available on NSButton - use tag index
-            b.tag = presets.firstIndex(where: { $0 == c }) ?? 0
-            presetStack.addArrangedSubview(b)
+        // Classic color wheel: angle = hue, radius = saturation. The
+        // brightness slider below re-shades the whole wheel.
+        wheel.translatesAutoresizingMaskIntoConstraints = false
+        wheel.widthAnchor.constraint(equalToConstant: 210).isActive = true
+        wheel.heightAnchor.constraint(equalToConstant: 210).isActive = true
+        wheel.onColorChange = { [weak self] color in
+            self?.syncUI(from: color)
         }
-        stack.addArrangedSubview(presetStack)
+        stack.addArrangedSubview(wheel)
 
-        preview.title = "颜色预览"
-        preview.bezelStyle = .rounded
-        preview.wantsLayer = true
-        preview.isBordered = true
-        preview.translatesAutoresizingMaskIntoConstraints = false
-        preview.heightAnchor.constraint(equalToConstant: 36).isActive = true
-        stack.addArrangedSubview(preview)
+        // Brightness row.
+        let vRow = NSStackView()
+        vRow.orientation = .horizontal
+        vRow.spacing = 8
+        let vl = NSTextField(labelWithString: "明度")
+        vl.font = .systemFont(ofSize: 12)
+        vl.translatesAutoresizingMaskIntoConstraints = false
+        vl.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        vSlider.minValue = 0
+        vSlider.maxValue = 100
+        vSlider.target = self
+        vSlider.action = #selector(brightnessChanged)
+        vRow.addArrangedSubview(vl)
+        vRow.addArrangedSubview(vSlider)
+        stack.addArrangedSubview(vRow)
 
         func row(_ label: String, _ slider: NSSlider, _ field: NSTextField) -> NSView {
             let s = NSStackView()
@@ -172,9 +163,8 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         bField.stringValue = "\(b)"
         aField.stringValue = "\(a)"
         hexField.stringValue = String(format: "#%02x%02x%02x", r, g, b)
-
-        preview.wantsLayer = true
-        preview.layer?.backgroundColor = color.cgColor
+        wheel.setColor(color)
+        vSlider.doubleValue = Double(round(rgb.brightnessComponent * 100))
     }
 
     private func readUI() -> NSColor {
@@ -185,27 +175,13 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         return NSColor(srgbRed: r, green: g, blue: b, alpha: a)
     }
 
-    @objc private func presetClicked(_ sender: NSButton) {
-        guard sender.tag >= 0 && sender.tag < presets.count else { return }
-        // A preset click is a complete color choice → apply and close.
-        syncUI(from: presets[sender.tag])
-        applyCurrentAndClose()
-    }
-
-    /// Apply the current color and close the panel (preset clicks and
-    /// eyedropper picks). Slider/HEX adjustments still need 确定 since users
-    /// tweak them repeatedly.
-    private func applyCurrentAndClose() {
-        onPick(current)
-        closePanel()
-    }
-
-    private func closePanel() {
-        view.window?.close()
-    }
-
     @objc private func sliderChanged() {
         syncUI(from: readUI())
+    }
+
+    @objc private func brightnessChanged() {
+        wheel.setBrightness(CGFloat(vSlider.doubleValue / 100))
+        syncUI(from: wheel.currentColor)
     }
 
     @objc private func fieldChanged() {
@@ -224,6 +200,18 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         let g = CGFloat((v >> 8) & 0xff) / 255
         let b = CGFloat(v & 0xff) / 255
         syncUI(from: NSColor(srgbRed: r, green: g, blue: b, alpha: CGFloat(aSlider.doubleValue / 100)))
+    }
+
+    /// Apply the current color and close the panel (eyedropper picks).
+    /// Wheel/slider/HEX adjustments still need 确定 since users tweak them
+    /// repeatedly.
+    private func applyCurrentAndClose() {
+        onPick(current)
+        closePanel()
+    }
+
+    private func closePanel() {
+        view.window?.close()
     }
 
     /// Fullscreen eyedropper: freeze the screen (panel hidden), pick any pixel
@@ -258,7 +246,7 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     func show(relativeTo parent: NSView, onClose: (() -> Void)? = nil) {
         self.onClose = onClose
         let window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 540),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -270,10 +258,151 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         if let pw = parent.window {
             let pwFrame = pw.frame
             let x = pwFrame.midX - 160
-            let y = pwFrame.midY - 210
+            let y = pwFrame.midY - 270
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// HSV color wheel: angle = hue, radius = saturation, re-shaded at the current
+/// brightness. Click or drag anywhere on the disc to pick a color — the same
+/// classic look as the system color panel's wheel mode.
+final class ColorWheelView: NSView {
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    var onColorChange: ((NSColor) -> Void)?
+
+    private(set) var hue: CGFloat = 0
+    private(set) var saturation: CGFloat = 0
+    private(set) var brightness: CGFloat = 1
+
+    private var wheelImage: CGImage?
+    private var renderedBrightness: CGFloat = -1
+
+    var currentColor: NSColor {
+        NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
+    }
+
+    func setColor(_ color: NSColor) {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        c.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        hue = h
+        saturation = s
+        brightness = b
+        needsDisplay = true
+    }
+
+    func setBrightness(_ v: CGFloat) {
+        brightness = min(1, max(0, v))
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if wheelImage == nil || abs(renderedBrightness - brightness) > 0.003 {
+            renderWheel()
+        }
+        if let wheelImage {
+            NSImage(cgImage: wheelImage, size: bounds.size).draw(in: bounds)
+        }
+
+        // Subtle outer hairline so the disc reads against the panel background.
+        let ring = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+        ring.lineWidth = 1
+        NSColor.separatorColor.setStroke()
+        ring.stroke()
+
+        // Indicator dot at (hue angle, saturation radius).
+        let r = bounds.width / 2 - 2
+        let theta = hue * 2 * .pi
+        let px = bounds.midX + saturation * r * cos(theta)
+        let py = bounds.midY + saturation * r * sin(theta)
+
+        let shadow = NSBezierPath(ovalIn: NSRect(x: px - 7, y: py - 7, width: 14, height: 14))
+        shadow.lineWidth = 2
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        shadow.stroke()
+        let halo = NSBezierPath(ovalIn: NSRect(x: px - 6, y: py - 6, width: 12, height: 12))
+        halo.lineWidth = 2
+        NSColor.white.setStroke()
+        halo.stroke()
+        let dot = NSBezierPath(ovalIn: NSRect(x: px - 3, y: py - 3, width: 6, height: 6))
+        currentColor.setFill()
+        dot.fill()
+    }
+
+    override func mouseDown(with event: NSEvent) { pick(at: event) }
+    override func mouseDragged(with event: NSEvent) { pick(at: event) }
+
+    private func pick(at event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let r = bounds.width / 2 - 2
+        let dx = (p.x - bounds.midX) / r
+        let dy = (p.y - bounds.midY) / r
+        let dist = min(1, sqrt(dx * dx + dy * dy))
+        var h = atan2(dy, dx) / (2 * .pi)
+        if h < 0 { h += 1 }
+        hue = h
+        saturation = dist
+        needsDisplay = true
+        onColorChange?(currentColor)
+    }
+
+    /// Render the wheel bitmap @2x. Flipped coords both here and in the dot
+    /// math keep angle/radius consistent.
+    private func renderWheel() {
+        let scale: CGFloat = 2
+        let dim = Int(bounds.width * scale)
+        guard dim > 4 else { return }
+        let c = CGFloat(dim) / 2
+        let r = c - 2
+        var buf = [UInt8](repeating: 0, count: dim * dim * 4)
+        for y in 0..<dim {
+            for x in 0..<dim {
+                let dx = (CGFloat(x) + 0.5 - c) / r
+                let dy = (CGFloat(y) + 0.5 - c) / r
+                let dist = sqrt(dx * dx + dy * dy)
+                let idx = (y * dim + x) * 4
+                guard dist <= 1 else { continue }
+                var h = atan2(dy, dx) / (2 * .pi)
+                if h < 0 { h += 1 }
+                let (rr, gg, bb) = Self.hsvToRGB(h, dist, brightness)
+                // ~1.5-device-pixel alpha falloff at the rim to avoid jaggies.
+                let alpha = min(1, (1 - dist) * r / 1.5)
+                buf[idx] = UInt8(rr)
+                buf[idx + 1] = UInt8(gg)
+                buf[idx + 2] = UInt8(bb)
+                buf[idx + 3] = UInt8(alpha * 255)
+            }
+        }
+        if let ctx = CGContext(
+            data: &buf,
+            width: dim, height: dim,
+            bitsPerComponent: 8, bytesPerRow: dim * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let img = ctx.makeImage() {
+            wheelImage = img
+            renderedBrightness = brightness
+        }
+    }
+
+    private static func hsvToRGB(_ h: CGFloat, _ s: CGFloat, _ v: CGFloat) -> (CGFloat, CGFloat, CGFloat) {
+        let i = floor(h * 6)
+        let f = h * 6 - i
+        let p = v * (1 - s)
+        let q = v * (1 - f * s)
+        let t = v * (1 - (1 - f) * s)
+        switch Int(i) % 6 {
+        case 0: return (v, t, p)
+        case 1: return (q, v, p)
+        case 2: return (p, v, t)
+        case 3: return (p, q, v)
+        case 4: return (t, p, v)
+        default: return (v, p, q)
+        }
     }
 }

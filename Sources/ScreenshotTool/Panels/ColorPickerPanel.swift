@@ -374,9 +374,11 @@ final class ColorWheelView: NSView {
                 let (rr, gg, bb) = Self.hsvToRGB(h, dist, 1)
                 // ~1.5-device-pixel alpha falloff at the rim to avoid jaggies.
                 let alpha = min(1, (1 - dist) * r / 1.5)
-                buf[idx] = UInt8(rr)
-                buf[idx + 1] = UInt8(gg)
-                buf[idx + 2] = UInt8(bb)
+                // hsvToRGB returns 0…1 floats — scale to 0…255 for the byte
+                // buffer (UInt8(1.0) == 1, not 255!).
+                buf[idx] = UInt8(rr * 255)
+                buf[idx + 1] = UInt8(gg * 255)
+                buf[idx + 2] = UInt8(bb * 255)
                 buf[idx + 3] = UInt8(alpha * 255)
             }
         }

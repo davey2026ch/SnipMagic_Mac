@@ -344,7 +344,10 @@ final class EditorViewController: NSViewController {
         // Right pane document mirrors the left canvas: the image sits inside a
         // 28pt-padded container, so it keeps the same top/side margins as the
         // left image and stays visually aligned.
-        compareImageView.imageScaling = .scaleNone
+        // scaleAxesIndependently: the frame is resized on zoom, and the image
+        // must stretch with it (scaleNone would keep the bitmap at natural
+        // size, so zooming looked like the image merely sliding around).
+        compareImageView.imageScaling = .scaleAxesIndependently
         compareImageView.frame = NSRect(x: 28, y: 28, width: 100, height: 100)
         compareContainer.addSubview(compareImageView)
         compareContainer.frame = NSRect(x: 0, y: 0, width: 156, height: 156)

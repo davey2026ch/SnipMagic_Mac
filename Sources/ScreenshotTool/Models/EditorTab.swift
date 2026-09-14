@@ -48,7 +48,10 @@ final class EditorTab {
     }
 
     /// Flatten base image + annotations into a single CGImage at original pixel size.
-    func renderComposite(includeCursorArea: Bool = true) -> CGImage? {
+    /// `excluding` drops one annotation from the render — used when copying the
+    /// region "framed" by a drawn shape, so the frame's own outline is not
+    /// baked into the copied pixels.
+    func renderComposite(includeCursorArea: Bool = true, excluding excluded: Annotation? = nil) -> CGImage? {
         let size = pixelSize
         guard size.width > 0, size.height > 0 else { return nil }
         let width = Int(size.width)
@@ -71,7 +74,7 @@ final class EditorTab {
         // Bitmap annotations (paste / mosaic) must be drawn in unflipped space —
         // CGContext.draw after a y-flip would invert them.
         var vectorAnnotations: [Annotation] = []
-        for ann in annotations {
+        for ann in annotations where ann.id != excluded?.id {
             switch ann.kind {
             case .pastedImage(let origin, let imgSize, let image):
                 let cgRect = CGRect(
@@ -108,8 +111,8 @@ final class EditorTab {
         return ctx.makeImage()
     }
 
-    func renderRegion(_ rect: CGRect) -> CGImage? {
-        guard let full = renderComposite() else { return nil }
+    func renderRegion(_ rect: CGRect, excluding excluded: Annotation? = nil) -> CGImage? {
+        guard let full = renderComposite(excluding: excluded) else { return nil }
         let clamped = rect.integral.intersection(CGRect(x: 0, y: 0, width: full.width, height: full.height))
         guard clamped.width >= 1, clamped.height >= 1 else { return nil }
         // CGImage.cropping uses top-left origin — matches annotation coords.

@@ -896,9 +896,11 @@ final class CanvasView: NSView {
         }
     }
 
-    /// Copy to clipboard: the rubber-band selection if one is active, else the
-    /// whole composite. Returns a feedback message for the status bar so it is
-    /// always obvious WHAT was copied.
+    /// Copy to clipboard. Priority: rubber-band selection → the selected
+    /// shape's bounding region (framing with a drawing tool reads as a
+    /// selection — e.g. a rectangle drawn with the 矩形 tool) → the whole
+    /// composite. Returns a feedback message so it is always obvious what
+    /// was copied.
     @discardableResult
     func copySelectionToClipboard() -> String? {
         guard let tab else { return nil }
@@ -906,6 +908,15 @@ final class CanvasView: NSView {
            let region = tab.renderRegion(selectionRect) {
             ClipboardService.writeImage(region)
             return "已复制选区 \(Int(region.width)) × \(Int(region.height)) 像素（⌘V 可粘贴为可拖动图层）"
+        }
+        if let ann = selectedAnnotation {
+            let box = ann.boundingBox.integral
+            // Exclude the frame shape itself so its outline is not baked
+            // into the copied pixels.
+            if box.width >= 2, box.height >= 2, let region = tab.renderRegion(box, excluding: ann) {
+                ClipboardService.writeImage(region)
+                return "已复制选中图形所在区域 \(Int(region.width)) × \(Int(region.height)) 像素（⌘V 可粘贴）"
+            }
         }
         if let full = tab.renderComposite() {
             ClipboardService.writeImage(full)

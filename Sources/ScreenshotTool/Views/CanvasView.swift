@@ -910,6 +910,12 @@ final class CanvasView: NSView {
             return "已复制选区 \(Int(region.width)) × \(Int(region.height)) 像素（⌘V 可粘贴为可拖动图层）"
         }
         if let ann = selectedAnnotation {
+            // A floating pasted layer (e.g. a cut-moved selection) copies its
+            // OWN pixels — excluding it would copy the white patch underneath.
+            if case .pastedImage(_, let size, let image) = ann.kind {
+                ClipboardService.writeImage(image)
+                return "已复制选中图层 \(Int(size.width)) × \(Int(size.height)) 像素（⌘V 可粘贴）"
+            }
             let box = ann.boundingBox.integral
             // Exclude the frame shape itself so its outline is not baked
             // into the copied pixels.

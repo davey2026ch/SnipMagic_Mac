@@ -21,6 +21,8 @@ enum Theme {
 enum AppInfo {
     static let name = "截图工具"
     static let bundleID = "com.mimo.screenshottool"
+    /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
+    static let version = "1.2.0"
 }
 
 /// Primary toolbar action: system-blue fill (matches active tab), white icon + text, tight gap.

@@ -186,7 +186,7 @@ final class EditorViewController: NSViewController {
         extractTableBtn.toolTip = "OCR 识别当前页签图片中的表格（有选区则只识别选区）"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
         let saveAllBtn = makeToolButton("💾 全部保存", action: #selector(saveAllTabs))
-        saveAllBtn.toolTip = "将全部页签导出到指定文件夹（文件类型可选，默认 JPEG；当前页签单张保存用 ⌘S）"
+        saveAllBtn.toolTip = "将全部页签导出到指定文件夹（文件类型可选，默认 PNG；当前页签单张保存用 ⌘S）"
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 

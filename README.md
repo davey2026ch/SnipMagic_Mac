@@ -1,126 +1,140 @@
+# 截图工具（macOS 原生）
 
+一款用 Swift 编写的 macOS 原生截图工具：区域截图、滚动长截图、多页签标注编辑、左右对比、缩放、取色、OCR 文字/表格识别，开箱即用。
 
-# Screenshot Tool for macOS
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v1.5.8-blue)
 
-A powerful, native screenshot application designed specifically for macOS. It provides comprehensive screenshot functionality with advanced image editing capabilities, including region/window/display capture, long screenshot stitching, and integrated OCR functionality.
+## 功能特性
 
-## Key Features
+### 截图
 
-### Capture Modes
-- **Region Capture**: Draw a custom selection area on any screen.
-- **Window Capture**: Select and capture individual application windows.
-- **Full Screen Capture**: Quickly capture the entire contents of any display.
-- **Long Capture (Scrolling)**: Automatically scroll and stitch together content that extends beyond the visible screen area (e.g., web pages or long documents).
+| 模式 | 快捷键（默认） | 说明 |
+| --- | --- | --- |
+| 区域截图 | `⌘ ⇧ R` | 框选任意区域，自动排除本应用窗口、隐藏鼠标 |
+| 长截图 | `⌘ ⇧ E` | 框选区域后滚动页面（网页/长文档），自动拼接为一张长图 |
 
-### Integrated Editor
-Annotate captured images directly within the app with a comprehensive set of tools:
-- **Shapes**: Rectangles, ovals, arrows, and freehand paths.
-- **Text**: Add text annotations with customizable fonts, sizes, and styles.
-- **Mosaic/Blur**: Protect sensitive information by obscuring selected areas.
-- **Numbering**: Quickly add sequential numbered badges.
-- **Color Picker**: Choose custom colors for all annotation elements.
+**长截图拼接算法**：基于行签名（16 段）+ dy 偏移全搜索 + 候选像素校验 + 接缝精炼（SAD 相关性），支持吸顶/吸底检测、文档坐标去重与断档分隔，滚动重叠区域拼接自然无重影。
 
-The editor supports non-destructive editing, allowing you to undo/redo changes and modify or remove annotations at any time.
+### 多页签编辑器
 
-### Optical Character Recognition (OCR)
-- Extract text from your screenshots using the built-in OCR feature.
-- Supports plain text extraction and intelligent table recognition.
-- Copy results directly to your clipboard for easy use in other applications.
+每次截图自动生成一个页签（P1、P2……），类似 Excel 底部的 Sheet 页签，可切换、可拖拽排序、右键关闭。
 
-### Customization & Automation
-- **Hotkey Support**: Define global keyboard shortcuts for instant region capture, window capture, and long capture.
-- **Startup Options**: Optionally launch the app at system login for quick access.
-- **System Tray Integration**: Manage screenshots via a convenient menu bar icon.
+- **标注工具**：选择、矩形、椭圆、箭头、自由画笔、文字、马赛克、序号
+- **无损编辑**：所有标注均可选中后移动、缩放、改样式，随时撤销/重做（`⌘Z` / `⌘⇧Z`）
+- **文字标注**：字号、加粗、颜色可调，可选透明背景
+- **马赛克**：密度可调（设置中 2–64 像素/格）
 
-## System Requirements
+### 左右对比
 
-- **macOS**: 12.0 (Monterey) or later
-- **Hardware**: Any Mac capable of running the above macOS version
+把一个页签拖到右侧（或右键菜单 → 与当前页签对比），两张图并排显示：
 
-## Installation
+- **同步滚动**：默认开启，两图横向 + 纵向联动滚动；可用工具栏开关关闭，独立滚动
+- **独立缩放**：两栏各自支持 `⌘ + 滚轮` 缩放
+- 「退出对比」按钮在右上角，一键恢复单图
 
-### Using Homebrew (Recommended)
+### 缩放
+
+- `⌘ + 鼠标滚轮`：放大/缩小（10%–800%，接近 100% 自动吸附），方向为**上滚缩小、下滚放大**
+- 触控板双指捏合同样可缩放
+- 任意缩放倍数下，标注的绘制、框选、拖动依然精确
+
+### 复制 / 粘贴
+
+`⌘C` 按以下优先级智能识别你要复制的内容：
+
+1. 橡皮筋选区（选择工具框选的区域）
+2. 浮动图层（框选后拖动起来的区域）
+3. 选中图形的包围盒区域（用矩形等工具画的框，自动排除边框线）
+4. 整张图片
+
+`⌘V` 粘贴为可拖动的浮动图层，状态栏会提示复制/粘贴了什么。
+
+### 保存
+
+- `⌘S`：保存当前页签，文件类型可选，**默认 PNG（无损）**，JPEG 可选（文件小）
+- **全部保存**：工具栏按钮或页签右键菜单，一次把所有页签导出到指定文件夹，文件名自动去重
+
+### 颜色
+
+- 侧栏底部颜色按钮：无边框色块，实时显示当前画笔颜色
+- 自定义颜色面板：**经典彩色圆盘**（角度 = 色相，半径 = 饱和度）+ 明度滑杆 + R/G/B/透明度 + HEX 输入
+- **全屏吸管**：冻结屏幕 + 10 倍放大镜 + HEX 实时显示，可取屏幕任意位置的颜色（当前图片、桌面壁纸、其他软件都行），左键取色、`Esc` 取消
+- 文字编辑面板使用同一套颜色选择逻辑
+
+### OCR 文字 / 表格识别
+
+- 工具栏「T 提取文字」/「表格」：识别当前页签图片中的文字或表格（有选区则只识别选区），结果可直接复制
+- 基于 MinerU 云服务，**需要联网**才能使用
+
+### 其他
+
+- **菜单栏常驻**：托盘图标快速发起截图
+- **自定义快捷键**：设置中可录制修改（至少含一个修饰键），支持恢复默认
+- **可调参数**：马赛克密度、线条粗细
+- 设置页显示当前版本号与打包时间
+
+## 安装
+
+### 下载安装（推荐）
+
+1. 前往 [Releases](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases) 下载最新 `.dmg`；
+2. 打开 dmg，将「截图工具」拖入 `Applications` 文件夹；
+3. **首次启动**：因使用 ad-hoc 签名，请在「应用程序」中**右键 → 打开**，再点「打开」以通过 Gatekeeper；
+4. 首次使用需授予**屏幕录制**权限（系统会自动引导，授权后重启应用生效）。
+
+### 系统要求
+
+- macOS 14.0（Sonoma）或更高版本
+
+## 使用指南
+
+### 基本流程
+
+1. 点击菜单栏图标、窗口内「开始截图」按钮，或按 `⌘⇧R`；
+2. 框选区域 → 松开即完成截图，自动进入编辑器；
+3. 用左侧工具栏标注（矩形/椭圆/箭头/画笔/文字/马赛克/序号）；
+4. `⌘C` 复制、`⌘S` 保存，或继续截下一张（多页签管理）。
+
+### 长截图
+
+1. 按 `⌘⇧E`（或工具栏「长截图」按钮）；
+2. 框选要拼接的区域（如浏览器内容区），出现控制面板；
+3. 点击「开始」后在原窗口滚动页面，工具自动采集并拼接；
+4. 滚到底后「完成」，得到一张完整长图。
+
+### 左右对比
+
+- 底部页签**按住拖到右侧**松手，或**右键 → 与当前页签对比**；
+- 「同步滚动」开关默认开启，两图一起滚动；关闭则各自独立；
+- 点击右上角「✕ 退出对比」恢复单图。
+
+## 从源码构建
+
 ```bash
-brew install --cask screenshot-tool-mac
+git clone https://gitee.com/mrpu2020/screenshot-tool-Mac.git
+cd screenshot-tool-Mac
+
+# 编译运行（Swift Package Manager）
+swift build --disable-sandbox
+swift run ScreenshotTool
+
+# 或直接打包 .app
+./build_app.sh
 ```
 
-### Manual Installation
-1. Download the latest release from the [GitHub Releases](https://github.com/mrpu2020/screenshot-tool-Mac/releases) page.
-2. Open the downloaded `.dmg` file.
-3. Drag the application into your `Applications` folder.
-4. (First Launch) Right-click the app in `Applications` and select **Open** to bypass macOS gatekeeper warnings.
+> `--disable-sandbox` 是 SwiftPM 在受限环境下构建的必要参数。
 
-### Post-Installation Permissions
-On first launch, the app requires **Screen Recording** permission to capture screen content. A guide will walk you through granting this permission if it's not already enabled.
+## 项目结构
 
-## Usage Guide
+```
+Sources/ScreenshotTool/
+├── Views/            # 画布、编辑器主视图、页签、全屏取色
+├── Panels/           # 设置、颜色面板、文字面板、OCR 结果、权限引导
+├── Services/         # 屏幕捕获、长截图拼接、快捷键、剪贴板、OCR、托盘
+├── Models/           # 标注模型、页签数据
+└── Utils/            # 主题与通用组件
+```
 
-### Starting a Capture
-1. Click the menu bar icon or use your configured hotkey.
-2. Select the capture mode:
-   - `Capture Region` (default)
-   - `Capture Window`
-   - `Capture Screen`
-   - `Long Capture`
-3. For region/window modes, follow the on-screen overlay instructions to make your selection.
-4. Your capture will open in the editor automatically.
+## 许可证
 
-### Using the Editor
-- **Select Tool**: Click on an existing annotation to select it.
-- **Move/Resize**: Drag to move, or use the corner handles to resize.
-- **Style Panel**: Change colors, line width, and other properties in the toolbar.
-- **Undo/Redo**: Use `Cmd+Z` and `Cmd+Shift+Z` (or the toolbar buttons).
-
-### Long Capture (Scrolling)
-1. Select `Long Capture` from the menu or hotkey.
-2. Select a window or region to capture. A control panel will appear.
-3. Click **Start** (Enter) to begin scrolling.
-4. The tool will automatically scroll and stitch the content.
-5. Press **Finish** (Enter) when done, or **Cancel** (Escape) to abort.
-
-### OCR Extraction
-1. Open a screenshot in the editor.
-2. Click `Extract Text` in the toolbar (or use the shortcut).
-3. A progress panel will appear while the text is being recognized.
-4. Once complete, the extracted text can be copied or closed.
-
-## Configuration
-
-### Hotkeys
-Default hotkeys are provided, but you can customize them in **Settings**:
-- **Region Capture**: `Cmd + Shift + 2`
-- **Window Capture**: `Cmd + Shift + 3`
-- **Long Capture**: `Cmd + Shift + 4`
-
-### Editor Defaults
-- **Mosaic Strength**: 10 (pixels per block)
-- **Line Thickness**: 3 (points)
-
-## Building from Source
-
-If you wish to contribute or build the app manually:
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/mrpu2020/screenshot-tool-Mac.git
-   ```
-2. **Navigate to the directory**:
-   ```bash
-   cd screenshot-tool-Mac
-   ```
-3. **Build the project**:
-   ```bash
-   swift build
-   ```
-4. **Run the application**:
-   ```bash
-   swift run
-   ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License.
+MIT License

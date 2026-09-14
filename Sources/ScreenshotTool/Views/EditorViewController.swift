@@ -26,6 +26,10 @@ final class EditorViewController: NSViewController {
     private let compareContainer = FlippedView()
     private let compareImageView = FlippedImageView()
     private let compareExitButton = NSButton(title: "✕ 退出对比", target: nil, action: nil)
+    private let compareSyncLabel = NSTextField(labelWithString: "同步滚动")
+    private let compareSyncSwitch = NSSwitch()
+    /// Master flag for the two-pane scroll sync (toolbar switch, default on).
+    private var compareSyncOn = true
     private let compareDivider = NSView()
     private let compareHint = NSView()
     private let compareHintLabel = NSTextField(labelWithString: "松开鼠标：与当前页签左右对比")
@@ -188,8 +192,27 @@ final class EditorViewController: NSViewController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(spacer)
 
-        // Right side: compare-mode exit lives here (top-right corner), same
-        // height as the primary "开始截图" button. Hidden outside compare mode.
+        // Right side (compare mode only): sync-scroll toggle + exit button.
+        // The toggle makes both panes scroll together horizontally and
+        // vertically; turn it off to scroll each pane independently.
+        compareSyncLabel.font = .systemFont(ofSize: 12)
+        compareSyncLabel.textColor = .secondaryLabelColor
+        compareSyncLabel.isHidden = true
+        compareSyncLabel.toolTip = "对比时两图横向、纵向一起滚动"
+        stack.addArrangedSubview(compareSyncLabel)
+
+        compareSyncSwitch.state = .on
+        compareSyncSwitch.controlSize = .small
+        compareSyncSwitch.target = self
+        compareSyncSwitch.action = #selector(compareSyncToggled)
+        compareSyncSwitch.toolTip = "对比时两图横向、纵向一起滚动"
+        compareSyncSwitch.isHidden = true
+        stack.addArrangedSubview(compareSyncSwitch)
+        stack.setCustomSpacing(6, after: compareSyncLabel)
+        stack.setCustomSpacing(14, after: compareSyncSwitch)
+
+        // Exit button: top-right corner, same height as the primary
+        // "开始截图" button. Hidden outside compare mode.
         compareExitButton.bezelStyle = .rounded
         compareExitButton.font = .systemFont(ofSize: 13, weight: .medium)
         compareExitButton.toolTip = "退出左右对比模式"
@@ -284,6 +307,12 @@ final class EditorViewController: NSViewController {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
+        // Legacy-style scrollers with auto-hide: overlay scrollers only flash
+        // while scrolling, so a horizontal bar was effectively undiscoverable.
+        // Legacy + autohidesScrollers keeps the bar visible whenever the
+        // content overflows — vertical AND horizontal — and hidden when it fits.
+        scroll.scrollerStyle = .legacy
+        scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
         scroll.backgroundColor = Theme.canvasBackground
@@ -300,6 +329,8 @@ final class EditorViewController: NSViewController {
         compareScroll.translatesAutoresizingMaskIntoConstraints = false
         compareScroll.hasVerticalScroller = true
         compareScroll.hasHorizontalScroller = true
+        compareScroll.scrollerStyle = .legacy
+        compareScroll.autohidesScrollers = true
         compareScroll.borderType = .noBorder
         compareScroll.drawsBackground = true
         compareScroll.backgroundColor = Theme.canvasBackground
@@ -466,6 +497,8 @@ final class EditorViewController: NSViewController {
         refreshCompareImage(force: true)
         compareScroll.isHidden = false
         compareDivider.isHidden = false
+        compareSyncLabel.isHidden = false
+        compareSyncSwitch.isHidden = false
         compareExitButton.isHidden = false
 
         NSLayoutConstraint.deactivate([normalTrailingConstraint])
@@ -477,12 +510,22 @@ final class EditorViewController: NSViewController {
         refreshStatus()
     }
 
+    @objc private func compareSyncToggled() {
+        compareSyncOn = compareSyncSwitch.state == .on
+        // Turning sync back on re-aligns the panes immediately.
+        if compareSyncOn, compareTabID != nil {
+            syncScroll(from: scroll, to: compareScroll)
+        }
+    }
+
     @objc private func exitCompare() {
         guard compareTabID != nil else { return }
         compareTabID = nil
         compareRenderStamp = nil
         compareScroll.isHidden = true
         compareDivider.isHidden = true
+        compareSyncLabel.isHidden = true
+        compareSyncSwitch.isHidden = true
         compareExitButton.isHidden = true
         NSLayoutConstraint.deactivate(compareConstraints)
         normalTrailingConstraint.isActive = true
@@ -510,8 +553,9 @@ final class EditorViewController: NSViewController {
     }
 
     /// Proportional scroll sync between the two panes (same fraction of max offset).
+    /// Honors the "同步滚动" switch: off means each pane scrolls independently.
     private func syncScroll(from src: NSScrollView, to dst: NSScrollView) {
-        guard compareTabID != nil, !scrollSyncPaused else { return }
+        guard compareTabID != nil, compareSyncOn, !scrollSyncPaused else { return }
         guard let srcDoc = src.documentView, let dstDoc = dst.documentView else { return }
         scrollSyncPaused = true
         defer { scrollSyncPaused = false }

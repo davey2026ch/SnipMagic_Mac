@@ -55,21 +55,28 @@ final class DraggableTabButton: NSButton {
 
 // MARK: - Tab chip
 
+/// Label that never intercepts mouse events, so the drag/click handling of
+/// the button underneath keeps working.
+final class PassThroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// A tightly-packed, Excel-style tab chip rendered at a comfortable size:
 /// a flat button filling a fixed-height chip with only the top corners
 /// rounded (like a browser/Excel tab), active = accent + white semibold
-/// label. Name-only: the title is centered with equal padding on both sides
+/// label. Name-only, perfectly centered both horizontally and vertically
 /// (closing lives in the right-click menu).
 final class TabChipView: NSView {
     let tabButton: DraggableTabButton
 
     init(title: String, index: Int, active: Bool, comparing: Bool) {
         let highlighted = active || comparing
-        // Symmetric padding around the centered title.
-        tabButton = DraggableTabButton(title: "  \(title)  ", target: nil, action: nil)
+        // The button itself carries no title — NSButton's cell-based title
+        // layout refuses to center reliably at this chip size, so the text
+        // is drawn by a pass-through label constrained to dead center.
+        tabButton = DraggableTabButton(title: "", target: nil, action: nil)
         tabButton.tag = index
         tabButton.isBordered = false
-        tabButton.alignment = .center
         tabButton.wantsLayer = true
         tabButton.layer?.backgroundColor = (active
             ? Theme.accent
@@ -80,8 +87,13 @@ final class TabChipView: NSView {
         tabButton.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         tabButton.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
         tabButton.layer?.borderWidth = 0.5
-        tabButton.contentTintColor = highlighted ? .white : .labelColor
-        tabButton.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
+
+        let label = PassThroughLabel(labelWithString: title)
+        label.font = .systemFont(ofSize: 12, weight: active ? .semibold : .regular)
+        label.textColor = highlighted ? .white : .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -89,6 +101,7 @@ final class TabChipView: NSView {
 
         tabButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tabButton)
+        addSubview(label)
 
         NSLayoutConstraint.activate([
             // Fixed chip height — NSStackView alone would keep the tiny
@@ -100,6 +113,13 @@ final class TabChipView: NSView {
             tabButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             tabButton.topAnchor.constraint(equalTo: topAnchor),
             tabButton.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            // Title: dead-center both axes, with symmetric padding driving the
+            // chip's width (label hugs → chip = label + 2 × padding).
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
         ])
     }
 

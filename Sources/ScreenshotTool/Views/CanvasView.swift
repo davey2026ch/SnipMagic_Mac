@@ -1,5 +1,46 @@
 import AppKit
 
+/// Scroll view that turns ⌘ + mouse wheel (and trackpad pinch) into image
+/// zoom instead of scrolling. Plain wheel / trackpad scrolling still works.
+/// Zooming the canvas view keeps annotation editing fully functional — the
+/// canvas geometry simply runs at a different points-per-pixel ratio.
+/// For document views that are not a CanvasView (e.g. the compare pane's
+/// plain container), set `onZoom` to handle the zoom yourself.
+final class ZoomableScrollView: NSScrollView {
+    /// Fallback zoom handler for non-canvas document views. Receives a
+    /// multiplicative factor (> 1 = zoom in).
+    var onZoom: ((CGFloat) -> Void)?
+
+    private func handleWheelZoom(deltaY: CGFloat) {
+        let factor: CGFloat = deltaY > 0 ? 1.1 : 1 / 1.1
+        performZoom(factor: factor)
+    }
+
+    private func performZoom(factor: CGFloat) {
+        if let canvas = documentView as? CanvasView {
+            canvas.zoom(byFactor: factor)
+        } else {
+            onZoom?(factor)
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // ⌘ + wheel → zoom (matches the user's muscle memory from browsers/Preview).
+        if event.modifierFlags.contains(.command), event.deltaY != 0 {
+            handleWheelZoom(deltaY: event.deltaY)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        // Trackpad pinch also zooms — it is the same intent.
+        if event.magnification != 0 {
+            performZoom(factor: 1 + event.magnification)
+        }
+    }
+}
+
 /// Drawings and hit-testing on the screenshot canvas. Coordinates are image pixels.
 final class CanvasView: NSView {
     /// Breathing room around the screenshot inside the scroll view.
@@ -52,6 +93,9 @@ final class CanvasView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
+    /// Ctrl+wheel / pinch zoom factor (1 = native logical size).
+    private(set) var zoomScale: CGFloat = 1.0
+
     /// Display scale: canvas view size is in points; annotations stay in pixels.
     private var pixelScale: CGFloat {
         let s = window?.backingScaleFactor
@@ -59,6 +103,9 @@ final class CanvasView: NSView {
             ?? 2.0
         return max(s, 1.0)
     }
+
+    /// Effective points-per-image-pixel after zoom (zoom in → smaller value).
+    private var displayScale: CGFloat { pixelScale / zoomScale }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -86,7 +133,7 @@ final class CanvasView: NSView {
         if let tab, tab.pixelSize.width > 0, tab.pixelSize.height > 0 {
             // Show at logical point size so a Retina capture is not drawn 2× larger
             // than the on-screen region the user selected.
-            let s = pixelScale
+            let s = displayScale
             let logical = CGSize(width: tab.pixelSize.width / s, height: tab.pixelSize.height / s)
             setFrameSize(NSSize(width: logical.width + pad * 2, height: logical.height + pad * 2))
         } else {
@@ -96,8 +143,21 @@ final class CanvasView: NSView {
 
     func setContentSize(_ size: CGSize) {
         let pad = Self.canvasPadding
-        let s = pixelScale
+        let s = displayScale
         setFrameSize(NSSize(width: size.width / s + pad * 2, height: size.height / s + pad * 2))
+        needsDisplay = true
+    }
+
+    /// Zoom by a multiplicative factor (⌘+wheel / trackpad pinch). Clamped to
+    /// 10%…800% with a gentle snap back to 100%. The scroll view keeps the
+    /// visible top-left anchored since the canvas origin stays at (0,0).
+    func zoom(byFactor factor: CGFloat) {
+        var new = zoomScale * factor
+        new = min(8.0, max(0.1, new))
+        if abs(new - 1.0) < 0.04 { new = 1.0 }
+        guard new != zoomScale else { return }
+        zoomScale = new
+        updateFrameSize()
         needsDisplay = true
     }
 
@@ -114,20 +174,20 @@ final class CanvasView: NSView {
     /// View point → image pixel coordinates.
     private func imagePoint(from event: NSEvent) -> CGPoint {
         let p = convert(event.locationInWindow, from: nil)
-        let s = pixelScale
+        let s = displayScale
         let pad = Self.canvasPadding
         return CGPoint(x: (p.x - pad) * s, y: (p.y - pad) * s)
     }
 
     private func viewPoint(fromPixel p: CGPoint) -> CGPoint {
-        let s = pixelScale
+        let s = displayScale
         let pad = Self.canvasPadding
         return CGPoint(x: p.x / s + pad, y: p.y / s + pad)
     }
 
     private func viewRect(fromPixel r: CGRect) -> CGRect {
         let origin = viewPoint(fromPixel: r.origin)
-        let s = pixelScale
+        let s = displayScale
         return CGRect(x: origin.x, y: origin.y, width: r.width / s, height: r.height / s)
     }
 
@@ -142,7 +202,7 @@ final class CanvasView: NSView {
 
         let size = tab.pixelSize
         let pad = Self.canvasPadding
-        let s = pixelScale
+        let s = displayScale
 
         // Soft mat behind the screenshot so it reads as a card, not edge-to-edge.
         let imgViewSize = CGSize(width: size.width / s, height: size.height / s)

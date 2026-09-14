@@ -16,13 +16,13 @@ final class EditorViewController: NSViewController {
     private let tabStrip = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "还没有截图")
     private let hintLabel = NSTextField(labelWithString: "")
-    private let scroll = NSScrollView()
+    private let scroll = ZoomableScrollView()
     private let canvas = CanvasView()
     private let emptyState = NSView()
     private let colorWell = NSColorWell()
 
     // Side-by-side compare mode (drag a tab onto the right half of the canvas)
-    private let compareScroll = NSScrollView()
+    private let compareScroll = ZoomableScrollView()
     private let compareContainer = FlippedView()
     private let compareImageView = FlippedImageView()
     private let compareExitButton = NSButton(title: "✕ 退出对比", target: nil, action: nil)
@@ -35,6 +35,9 @@ final class EditorViewController: NSViewController {
     private let compareHintLabel = NSTextField(labelWithString: "松开鼠标：与当前页签左右对比")
     private var compareTabID: UUID?
     private var compareRenderStamp: (annotationCount: Int, baseImage: CGImage)?
+    /// ⌘+wheel zoom for the right compare pane (1 = natural size).
+    private var compareZoom: CGFloat = 1.0
+    private var compareBaseSize: NSSize = .zero
     private var scrollSyncPaused = false
     private var scrollObservers: [NSObjectProtocol] = []
     private var normalTrailingConstraint: NSLayoutConstraint!
@@ -347,7 +350,10 @@ final class EditorViewController: NSViewController {
         compareContainer.frame = NSRect(x: 0, y: 0, width: 156, height: 156)
         compareScroll.documentView = compareContainer
         compareScroll.contentView.postsBoundsChangedNotifications = true
-
+        // ⌘+wheel / pinch zoom for the right pane (document is not a CanvasView).
+        compareScroll.onZoom = { [weak self] factor in
+            self?.zoomCompare(byFactor: factor)
+        }
         compareDivider.translatesAutoresizingMaskIntoConstraints = false
         compareDivider.wantsLayer = true
         compareDivider.layer?.backgroundColor = NSColor.separatorColor.cgColor
@@ -494,6 +500,7 @@ final class EditorViewController: NSViewController {
         guard target.id != current.id else { return }
 
         compareTabID = target.id
+        compareZoom = 1.0
         refreshCompareImage(force: true)
         compareScroll.isHidden = false
         compareDivider.isHidden = false
@@ -543,13 +550,29 @@ final class EditorViewController: NSViewController {
         guard let composite = tab.renderComposite() else { return }
         compareRenderStamp = (annotationCount: tab.annotations.count, baseImage: tab.baseImage)
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        let size = NSSize(width: CGFloat(composite.width) / scale, height: CGFloat(composite.height) / scale)
-        compareImageView.image = NSImage(cgImage: composite, size: size)
-        compareImageView.frame = NSRect(x: 28, y: 28, width: size.width, height: size.height)
-        compareContainer.frame = NSRect(
-            origin: .zero,
-            size: NSSize(width: size.width + 56, height: size.height + 56)
-        )
+        compareBaseSize = NSSize(width: CGFloat(composite.width) / scale, height: CGFloat(composite.height) / scale)
+        compareImageView.image = NSImage(cgImage: composite, size: compareBaseSize)
+        applyCompareZoom()
+    }
+
+    /// Lay out the right pane's image at the current compareZoom.
+    private func applyCompareZoom() {
+        guard compareBaseSize.width > 0 else { return }
+        let w = compareBaseSize.width * compareZoom
+        let h = compareBaseSize.height * compareZoom
+        compareImageView.frame = NSRect(x: 28, y: 28, width: w, height: h)
+        compareContainer.frame = NSRect(origin: .zero, size: NSSize(width: w + 56, height: h + 56))
+    }
+
+    /// ⌘+wheel / pinch zoom for the right pane. Same clamp-and-snap as the canvas.
+    private func zoomCompare(byFactor factor: CGFloat) {
+        guard compareBaseSize.width > 0 else { return }
+        var new = compareZoom * factor
+        new = min(8.0, max(0.1, new))
+        if abs(new - 1.0) < 0.04 { new = 1.0 }
+        guard new != compareZoom else { return }
+        compareZoom = new
+        applyCompareZoom()
     }
 
     /// Proportional scroll sync between the two panes (same fraction of max offset).

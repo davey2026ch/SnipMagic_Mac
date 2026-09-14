@@ -58,18 +58,18 @@ final class DraggableTabButton: NSButton {
 /// A tightly-packed, Excel-style tab chip rendered at a comfortable size:
 /// a flat button filling a fixed-height chip with only the top corners
 /// rounded (like a browser/Excel tab), active = accent + white semibold
-/// label. The small ✕ is overlaid at the top-right corner of the *active*
-/// chip only (it does not consume layout width).
+/// label. Name-only: the title is centered with equal padding on both sides
+/// (closing lives in the right-click menu).
 final class TabChipView: NSView {
     let tabButton: DraggableTabButton
-    let closeButton = NSButton(title: "✕", target: nil, action: nil)
 
     init(title: String, index: Int, active: Bool, comparing: Bool) {
         let highlighted = active || comparing
-        // Trailing spaces reserve room for the ✕ overlay on the active chip.
-        tabButton = DraggableTabButton(title: "   \(title)      ", target: nil, action: nil)
+        // Symmetric padding around the centered title.
+        tabButton = DraggableTabButton(title: "  \(title)  ", target: nil, action: nil)
         tabButton.tag = index
         tabButton.isBordered = false
+        tabButton.alignment = .center
         tabButton.wantsLayer = true
         tabButton.layer?.backgroundColor = (active
             ? Theme.accent
@@ -90,15 +90,6 @@ final class TabChipView: NSView {
         tabButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tabButton)
 
-        closeButton.tag = index
-        closeButton.isBordered = false
-        closeButton.font = .systemFont(ofSize: 11, weight: .bold)
-        closeButton.contentTintColor = highlighted ? .white : .secondaryLabelColor
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
-        closeButton.isHidden = !active
-        closeButton.toolTip = "关闭页签"
-        addSubview(closeButton)
-
         NSLayoutConstraint.activate([
             // Fixed chip height — NSStackView alone would keep the tiny
             // intrinsic button height, which looked cramped.
@@ -109,12 +100,6 @@ final class TabChipView: NSView {
             tabButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             tabButton.topAnchor.constraint(equalTo: topAnchor),
             tabButton.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            // ✕ vertically centered inside the trailing title padding.
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 14),
-            closeButton.heightAnchor.constraint(equalToConstant: 14),
         ])
     }
 

@@ -188,15 +188,17 @@ final class EditorViewController: NSViewController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(spacer)
 
-        // Right side: color swatch only (density / thickness / hotkey live in 设置)
-        colorWell.color = style.color
-        colorWell.target = self
-        colorWell.action = #selector(colorWellChanged)
-        colorWell.translatesAutoresizingMaskIntoConstraints = false
-        colorWell.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        colorWell.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        colorWell.toolTip = "画笔颜色"
-        stack.addArrangedSubview(colorWell)
+        // Right side: compare-mode exit lives here (top-right corner), same
+        // height as the primary "开始截图" button. Hidden outside compare mode.
+        compareExitButton.bezelStyle = .rounded
+        compareExitButton.font = .systemFont(ofSize: 13, weight: .medium)
+        compareExitButton.toolTip = "退出左右对比模式"
+        compareExitButton.target = self
+        compareExitButton.action = #selector(exitCompare)
+        compareExitButton.translatesAutoresizingMaskIntoConstraints = false
+        compareExitButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        compareExitButton.isHidden = true
+        stack.addArrangedSubview(compareExitButton)
     }
 
     private func buildBody() {
@@ -263,6 +265,21 @@ final class EditorViewController: NSViewController {
             toolButtons[tool] = btn
         }
 
+        // Color swatch at the very bottom of the tool sidebar, under the
+        // number tool — moved here from the top toolbar's right corner.
+        colorWell.color = style.color
+        colorWell.target = self
+        colorWell.action = #selector(colorWellChanged)
+        colorWell.translatesAutoresizingMaskIntoConstraints = false
+        colorWell.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        colorWell.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        colorWell.toolTip = "画笔颜色"
+        let colorGap = NSView()
+        colorGap.translatesAutoresizingMaskIntoConstraints = false
+        colorGap.heightAnchor.constraint(equalToConstant: 6).isActive = true
+        sideStack.addArrangedSubview(colorGap)
+        sideStack.addArrangedSubview(colorWell)
+
         // Canvas area — documentView uses frame-based layout, not Auto Layout.
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
@@ -307,17 +324,7 @@ final class EditorViewController: NSViewController {
         bodyContainer.addSubview(compareDivider)
 
         // Floating controls sit above the panes.
-        compareExitButton.title = "  ✕  退出对比  "
-        compareExitButton.bezelStyle = .rounded
-        compareExitButton.font = .systemFont(ofSize: 13, weight: .medium)
-        compareExitButton.toolTip = "退出左右对比模式"
-        compareExitButton.target = self
-        compareExitButton.action = #selector(exitCompare)
-        compareExitButton.translatesAutoresizingMaskIntoConstraints = false
-        compareExitButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        compareExitButton.isHidden = true
-        bodyContainer.addSubview(compareExitButton)
-
+        // (The compare exit button now lives in the toolbar's top-right.)
         compareHint.translatesAutoresizingMaskIntoConstraints = false
         compareHint.wantsLayer = true
         compareHint.layer?.backgroundColor = Theme.accent.withAlphaComponent(0.12).cgColor
@@ -375,9 +382,6 @@ final class EditorViewController: NSViewController {
             emptyState.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             emptyState.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             emptyState.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
-
-            compareExitButton.topAnchor.constraint(equalTo: bodyContainer.topAnchor, constant: 10),
-            compareExitButton.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor, constant: -12),
 
             compareHint.leadingAnchor.constraint(equalTo: bodyContainer.centerXAnchor, constant: 12),
             compareHint.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor, constant: -12),
@@ -767,8 +771,6 @@ final class EditorViewController: NSViewController {
         let chip = TabChipView(title: title, index: index, active: active, comparing: comparing)
         chip.tabButton.target = self
         chip.tabButton.action = #selector(tabClicked(_:))
-        chip.closeButton.target = self
-        chip.closeButton.action = #selector(closeTabFromChip(_:))
 
         let menu = NSMenu()
         let close = NSMenuItem(title: "关闭", action: #selector(closeTabFromMenu(_:)), keyEquivalent: "")
@@ -786,10 +788,6 @@ final class EditorViewController: NSViewController {
         chip.tabButton.menu = menu
 
         return chip
-    }
-
-    @objc private func closeTabFromChip(_ sender: NSButton) {
-        requestCloseTab(at: sender.tag)
     }
 
     @objc private func compareTabFromMenu(_ sender: NSMenuItem) {

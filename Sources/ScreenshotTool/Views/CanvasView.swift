@@ -896,31 +896,49 @@ final class CanvasView: NSView {
         }
     }
 
-    func copySelectionToClipboard() {
-        guard let tab else { return }
-        // With a selection: copy that region. Without: copy the whole composite.
-        if selectionRect.width > 2, selectionRect.height > 2 {
-            if let region = tab.renderRegion(selectionRect) {
-                ClipboardService.writeImage(region)
-            }
-        } else if let full = tab.renderComposite() {
-            ClipboardService.writeImage(full)
+    /// Copy to clipboard: the rubber-band selection if one is active, else the
+    /// whole composite. Returns a feedback message for the status bar so it is
+    /// always obvious WHAT was copied.
+    @discardableResult
+    func copySelectionToClipboard() -> String? {
+        guard let tab else { return nil }
+        if selectionRect.width > 2, selectionRect.height > 2,
+           let region = tab.renderRegion(selectionRect) {
+            ClipboardService.writeImage(region)
+            return "已复制选区 \(Int(region.width)) × \(Int(region.height)) 像素（⌘V 可粘贴为可拖动图层）"
         }
+        if let full = tab.renderComposite() {
+            ClipboardService.writeImage(full)
+            return "已复制整张图片（框选局部区域后再 ⌘C 则只复制选区）"
+        }
+        return nil
     }
 
-    func pasteFromClipboard() {
-        guard let tab, let img = ClipboardService.readImage() else { return }
+    /// Paste the clipboard image as a floating, draggable layer. With an active
+    /// selection the copy lands slightly offset from the selection (not exactly
+    /// on top — pasting in place made it look like nothing happened); without a
+    /// selection it lands near the image center. Returns a feedback message.
+    @discardableResult
+    func pasteFromClipboard() -> String? {
+        guard let tab, let img = ClipboardService.readImage() else { return nil }
         onWillMutate?()
-        // Place at former selection origin, else near center — and leave the paste selected.
+        let imgSize = CGSize(width: img.width, height: img.height)
+        // Place at former selection origin (offset so the copy is visible),
+        // else near center — and leave the paste selected.
         let origin: CGPoint
         if selectionRect.width > 2 {
-            origin = selectionRect.origin
+            let maxX = max(0, tab.pixelSize.width - imgSize.width)
+            let maxY = max(0, tab.pixelSize.height - imgSize.height)
+            origin = CGPoint(
+                x: min(selectionRect.origin.x + 24, maxX),
+                y: min(selectionRect.origin.y + 24, maxY)
+            )
         } else {
             origin = CGPoint(x: tab.pixelSize.width / 4, y: tab.pixelSize.height / 4)
         }
         clearSelection()
         let ann = Annotation(
-            kind: .pastedImage(origin: origin, size: CGSize(width: img.width, height: img.height), image: img),
+            kind: .pastedImage(origin: origin, size: imgSize, image: img),
             color: style.color,
             lineWidth: style.lineWidth
         )
@@ -931,6 +949,7 @@ final class CanvasView: NSView {
         needsDisplay = true
         // Pasted layer is what the user moves next.
         onRequestToolSwitch?(.select)
+        return "已粘贴 \(Int(imgSize.width)) × \(Int(imgSize.height)) 像素（拖动放置，点击空白处固定）"
     }
 
     func updateText(annotation: Annotation, content: String, fontSize: CGFloat, bold: Bool, opaque: Bool) {

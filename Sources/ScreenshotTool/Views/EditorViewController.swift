@@ -1187,19 +1187,36 @@ final class EditorViewController: NSViewController {
     // MARK: - Copy / Paste / Save
 
     func copySelection() {
-        canvas.copySelectionToClipboard()
+        if let msg = canvas.copySelectionToClipboard() {
+            flashStatus(msg)
+        }
     }
 
     func paste() {
-        canvas.pasteFromClipboard()
+        if let msg = canvas.pasteFromClipboard() {
+            flashStatus(msg)
+        }
     }
 
-    /// Accessory view with a file-type popup for save panels. Default JPEG
-    /// (user preference); PNG is the lossless alternative.
+    /// Show a transient message in the status bar (reverts to the normal
+    /// status text after ~2.5s) so clipboard actions give visible feedback.
+    private var statusResetWorkItem: DispatchWorkItem?
+    private func flashStatus(_ message: String) {
+        statusResetWorkItem?.cancel()
+        statusLabel.stringValue = message
+        let work = DispatchWorkItem { [weak self] in
+            self?.refreshStatus()
+        }
+        statusResetWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+    }
+
+    /// Accessory view with a file-type popup for save panels. Default PNG
+    /// (lossless — screenshots stay pixel-perfect); JPEG for smaller files.
     private func makeSaveFormatAccessory() -> (view: NSView, popup: NSPopUpButton) {
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.addItem(withTitle: "JPEG 图片（.jpg，文件小）")
         popup.addItem(withTitle: "PNG 图片（.png，无损）")
+        popup.addItem(withTitle: "JPEG 图片（.jpg，文件小）")
         popup.selectItem(at: 0)
         popup.target = self
         popup.action = #selector(saveFormatPopupChanged(_:))
@@ -1216,7 +1233,7 @@ final class EditorViewController: NSViewController {
     /// Keep the save panel's filename extension / the open panel's message in
     /// sync with the file-type popup selection.
     @objc private func saveFormatPopupChanged(_ sender: NSPopUpButton) {
-        let isPNG = sender.indexOfSelectedItem == 1
+        let isPNG = sender.indexOfSelectedItem == 0
         if let savePanel = sender.window as? NSSavePanel {
             savePanel.allowedContentTypes = [isPNG ? .png : .jpeg]
             let base = (savePanel.nameFieldStringValue as NSString).deletingPathExtension
@@ -1235,9 +1252,9 @@ final class EditorViewController: NSViewController {
 
         let panel = NSSavePanel()
         panel.title = "另存为"
-        // Single type (JPEG default) → no built-in format popup; the accessory
+        // Single type (PNG default) → no built-in format popup; the accessory
         // view owns the type choice and updates allowedContentTypes on change.
-        panel.allowedContentTypes = [.jpeg]
+        panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = tab.displayTitle
         panel.canCreateDirectories = true
         panel.showsTagField = false
@@ -1261,7 +1278,7 @@ final class EditorViewController: NSViewController {
         }
     }
 
-    /// Save every tab into a user-chosen folder (JPEG by default, PNG optional
+    /// Save every tab into a user-chosen folder (PNG by default, JPEG optional
     /// via the file-type popup). Filenames come from tab titles (deduplicated);
     /// failures are collected and reported.
     @objc private func saveAllTabs() {
@@ -1275,7 +1292,7 @@ final class EditorViewController: NSViewController {
 
         let panel = NSOpenPanel()
         panel.title = "全部保存"
-        panel.message = "选择保存位置，\(tabs.count) 个页签将以 JPEG 格式保存"
+        panel.message = "选择保存位置，\(tabs.count) 个页签将以 PNG 格式保存"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
@@ -1285,7 +1302,7 @@ final class EditorViewController: NSViewController {
 
         panel.beginSheetModal(for: view.window!) { resp in
             guard resp == .OK, let dir = panel.url else { return }
-            let isPNG = accessory.popup.indexOfSelectedItem == 1
+            let isPNG = accessory.popup.indexOfSelectedItem == 0
             var savedCount = 0
             var failedTitles: [String] = []
             var usedNames = Set<String>()

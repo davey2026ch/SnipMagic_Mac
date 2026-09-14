@@ -281,4 +281,8 @@ extension HotkeyService {
     static var displayStringDefault: String {
         format(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | shiftKey))
     }
+
+    static var displayStringDefaultLong: String {
+        format(keyCode: UInt32(kVK_ANSI_G), modifiers: UInt32(cmdKey | shiftKey))
+    }
 }

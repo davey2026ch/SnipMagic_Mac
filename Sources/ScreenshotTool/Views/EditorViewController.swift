@@ -158,10 +158,12 @@ final class EditorViewController: NSViewController {
         extractTextBtn.toolTip = "OCR 识别当前页签图片中的文字（有选区则只识别选区）"
         extractTableBtn.toolTip = "OCR 识别当前页签图片中的表格（有选区则只识别选区）"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
+        let saveAllBtn = makeToolButton("💾 全部保存", action: #selector(saveAllTabs))
+        saveAllBtn.toolTip = "将全部页签导出为 PNG 到指定文件夹（当前页签单张保存用 ⌘S）"
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractTextBtn, extractTableBtn, settingsBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractTextBtn, extractTableBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -391,8 +393,9 @@ final class EditorViewController: NSViewController {
 
     private func applyShortcutHints() {
         let cmd = HotkeyService.shared.displayString
+        let long = HotkeyService.shared.longDisplayString
         if let label = emptyState.viewWithTag(99) as? NSTextField {
-            label.stringValue = "还没有截图\n按 \(cmd) 框选屏幕，截图会自动变成一个新页签\n（当前快捷键可在顶部「快捷键」里修改）"
+            label.stringValue = "还没有截图\n按 \(cmd) 框选屏幕，截图会自动变成一个新页签\n长截图：\(long)（两个快捷键均可在「设置」里修改）"
         }
     }
 
@@ -768,15 +771,22 @@ final class EditorViewController: NSViewController {
         guard view.window != nil else { return }
         let panel = SettingsPanel(
             hotkeyDisplay: HotkeyService.shared.displayString,
+            longHotkeyDisplay: HotkeyService.shared.longDisplayString,
             mosaic: style.mosaicCell,
             thickness: style.lineWidth
-        ) { [weak self] hotkey, mosaic, thickness in
+        ) { [weak self] hotkey, longHotkey, mosaic, thickness in
             guard let self else { return }
             if let (key, mods) = hotkey {
                 HotkeyService.shared.register(keyCode: key, modifiers: mods)
             } else {
                 let cur = HotkeyService.shared.currentHotkey
                 HotkeyService.shared.register(keyCode: cur.keyCode, modifiers: cur.modifiers)
+            }
+            if let (key, mods) = longHotkey {
+                HotkeyService.shared.registerLong(keyCode: key, modifiers: mods)
+            } else {
+                let cur = HotkeyService.shared.currentLongHotkey
+                HotkeyService.shared.registerLong(keyCode: cur.keyCode, modifiers: cur.modifiers)
             }
             self.applyShortcutHints()
             self.style.mosaicCell = mosaic
@@ -797,10 +807,13 @@ final class EditorViewController: NSViewController {
 
     @objc private func doUndo() {
         guard let tab = currentTab, let stack = undoByTab[tab.id] else { return }
-        if let prev = stack.undo(current: tab.annotations) {
-            tab.annotations = prev.map { $0.copyAnnotation() }
-            // copyAnnotation doesn't deep-copy kind images well - store refs
-            // Actually we need proper snapshot. Fix: store the array of Annotation references before mutation.
+        let current = EditorSnapshot(
+            annotations: tab.annotations.map { $0.copyAnnotation() },
+            baseImage: tab.baseImage
+        )
+        if let prev = stack.undo(current: current) {
+            tab.annotations = prev.annotations
+            tab.baseImage = prev.baseImage
             canvas.selectedAnnotation = nil
             canvas.tab = tab
             canvas.needsDisplay = true
@@ -811,8 +824,13 @@ final class EditorViewController: NSViewController {
 
     @objc private func doRedo() {
         guard let tab = currentTab, let stack = undoByTab[tab.id] else { return }
-        if let next = stack.redo(current: tab.annotations) {
-            tab.annotations = next
+        let current = EditorSnapshot(
+            annotations: tab.annotations.map { $0.copyAnnotation() },
+            baseImage: tab.baseImage
+        )
+        if let next = stack.redo(current: current) {
+            tab.annotations = next.annotations
+            tab.baseImage = next.baseImage
             canvas.selectedAnnotation = nil
             canvas.tab = tab
             canvas.needsDisplay = true
@@ -828,8 +846,13 @@ final class EditorViewController: NSViewController {
             undoByTab[tab.id] = s
             return s
         }()
-        // Deep-ish snapshot: new array with copied Annotation objects
-        let snapshot = tab.annotations.map { $0.copyAnnotation() }
+        // Deep-ish snapshot: new array with copied Annotation objects, plus the
+        // (immutable) base image reference — mosaic/paste commits bake pixels
+        // into the base image, so undo must capture it too.
+        let snapshot = EditorSnapshot(
+            annotations: tab.annotations.map { $0.copyAnnotation() },
+            baseImage: tab.baseImage
+        )
         stack.push(snapshot)
     }
 
@@ -870,6 +893,72 @@ final class EditorViewController: NSViewController {
                 a.runModal()
             }
         }
+    }
+
+    /// Save every tab as PNG into a user-chosen folder. Filenames come from
+    /// tab titles (deduplicated); failures are collected and reported.
+    @objc private func saveAllTabs() {
+        guard !tabs.isEmpty else {
+            let a = NSAlert()
+            a.messageText = "还没有截图"
+            a.informativeText = "先截一张图，再使用「全部保存」。"
+            a.runModal()
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "全部保存"
+        panel.message = "选择保存位置，\(tabs.count) 个页签将以 PNG 格式保存"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+
+        panel.beginSheetModal(for: view.window!) { resp in
+            guard resp == .OK, let dir = panel.url else { return }
+            var savedCount = 0
+            var failedTitles: [String] = []
+            var usedNames = Set<String>()
+
+            for tab in self.tabs {
+                guard let image = tab.renderComposite() else {
+                    failedTitles.append(tab.displayTitle)
+                    continue
+                }
+                let base = Self.sanitizedFileName(tab.displayTitle)
+                var name = base
+                var n = 2
+                while usedNames.contains(name.lowercased()) {
+                    name = "\(base)-\(n)"
+                    n += 1
+                }
+                usedNames.insert(name.lowercased())
+                let url = dir.appendingPathComponent("\(name).png")
+                do {
+                    try ImageIOExporter.save(image, to: url, as: .png)
+                    tab.markSaved(url: url)
+                    savedCount += 1
+                } catch {
+                    failedTitles.append(tab.displayTitle)
+                }
+            }
+
+            self.refreshTabs()
+            self.refreshStatus()
+
+            if !failedTitles.isEmpty {
+                let a = NSAlert()
+                a.messageText = "部分页签保存失败"
+                a.informativeText = "已保存 \(savedCount)/\(self.tabs.count) 个，失败：\(failedTitles.joined(separator: "、"))"
+                a.runModal()
+            }
+        }
+    }
+
+    private static func sanitizedFileName(_ name: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "截图" : trimmed
     }
 
     // MARK: - Text panel

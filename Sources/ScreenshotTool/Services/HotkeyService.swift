@@ -1,15 +1,19 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Global hotkey using Carbon RegisterEventHotKey (no Accessibility permission needed).
+/// Global hotkeys using Carbon RegisterEventHotKey (no Accessibility permission needed).
+/// Hotkey id 1 = region capture (default ⌘⇧R), id 2 = long screenshot (default ⌘⇧G).
 final class HotkeyService {
     static let shared = HotkeyService()
 
     var onHotkey: (() -> Void)?
+    var onLongHotkey: (() -> Void)?
 
     private var hotKeyRef: EventHotKeyRef?
+    private var longHotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
     private var current: (keyCode: UInt32, modifiers: UInt32) = (UInt32(kVK_ANSI_R), UInt32(cmdKey | shiftKey))
+    private var currentLong: (keyCode: UInt32, modifiers: UInt32) = (UInt32(kVK_ANSI_G), UInt32(cmdKey | shiftKey))
 
     private init() {}
 
@@ -17,18 +21,41 @@ final class HotkeyService {
         Self.format(keyCode: current.keyCode, modifiers: current.modifiers)
     }
 
+    var longDisplayString: String {
+        Self.format(keyCode: currentLong.keyCode, modifiers: currentLong.modifiers)
+    }
+
     var currentHotkey: (keyCode: UInt32, modifiers: UInt32) {
         current
     }
 
+    var currentLongHotkey: (keyCode: UInt32, modifiers: UInt32) {
+        currentLong
+    }
+
     func registerDefault() {
         register(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | shiftKey))
+        registerLong(keyCode: UInt32(kVK_ANSI_G), modifiers: UInt32(cmdKey | shiftKey))
     }
 
     func register(keyCode: UInt32, modifiers: UInt32) {
-        unregister()
+        unregisterHotkey()
         current = (keyCode, modifiers)
+        installHandlerIfNeeded()
+        let hotKeyID = EventHotKeyID(signature: OSType(0x53484F54), id: 1)
+        RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
+    }
 
+    func registerLong(keyCode: UInt32, modifiers: UInt32) {
+        unregisterLongHotkey()
+        currentLong = (keyCode, modifiers)
+        installHandlerIfNeeded()
+        let hotKeyID = EventHotKeyID(signature: OSType(0x53484F54), id: 2)
+        RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetEventDispatcherTarget(), 0, &longHotKeyRef)
+    }
+
+    private func installHandlerIfNeeded() {
+        guard eventHandler == nil else { return }
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -39,8 +66,11 @@ final class HotkeyService {
             let service = Unmanaged<HotkeyService>.fromOpaque(userData).takeUnretainedValue()
             var hk = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
-            if hk.signature == OSType(0x53484F54) {
-                DispatchQueue.main.async {
+            guard hk.signature == OSType(0x53484F54) else { return noErr }
+            DispatchQueue.main.async {
+                if hk.id == 2 {
+                    service.onLongHotkey?()
+                } else {
                     service.onHotkey?()
                 }
             }
@@ -55,19 +85,30 @@ final class HotkeyService {
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
-
-        let hotKeyID = EventHotKeyID(signature: OSType(0x53484F54), id: 1)
-        RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
     }
 
     func unregister() {
+        unregisterHotkey()
+        unregisterLongHotkey()
+        if let eventHandler {
+            RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
+        }
+    }
+
+    /// Suspend only the region-capture hotkey (e.g. while recording a new one).
+    func unregisterHotkey() {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
-        if let eventHandler {
-            RemoveEventHandler(eventHandler)
-            self.eventHandler = nil
+    }
+
+    /// Suspend only the long-screenshot hotkey.
+    func unregisterLongHotkey() {
+        if let longHotKeyRef {
+            UnregisterEventHotKey(longHotKeyRef)
+            self.longHotKeyRef = nil
         }
     }
 

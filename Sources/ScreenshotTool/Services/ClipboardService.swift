@@ -1,8 +1,16 @@
 import AppKit
 
+/// Full editor state snapshot. Mosaic and paste-commit bake pixels directly
+/// into the tab's base image, so undo must restore both layers — an
+/// annotations-only snapshot makes mosaic undo appear to do nothing.
+struct EditorSnapshot {
+    let annotations: [Annotation]
+    let baseImage: CGImage
+}
+
 final class UndoStack {
-    private(set) var undoStack: [[Annotation]] = []
-    private(set) var redoStack: [[Annotation]] = []
+    private var undoStack: [EditorSnapshot] = []
+    private var redoStack: [EditorSnapshot] = []
     private let limit = 100
 
     var canUndo: Bool { !undoStack.isEmpty }
@@ -13,24 +21,24 @@ final class UndoStack {
         redoStack.removeAll()
     }
 
-    /// Snapshot current annotations before a mutation.
-    func push(_ annotations: [Annotation]) {
-        undoStack.append(annotations)
+    /// Snapshot current state before a mutation.
+    func push(_ snapshot: EditorSnapshot) {
+        undoStack.append(snapshot)
         if undoStack.count > limit {
             undoStack.removeFirst()
         }
         redoStack.removeAll()
     }
 
-    func undo(current: [Annotation]) -> [Annotation]? {
+    func undo(current: EditorSnapshot) -> EditorSnapshot? {
         guard let prev = undoStack.popLast() else { return nil }
-        redoStack.append(current.map { $0.copyAnnotation() })
+        redoStack.append(current)
         return prev
     }
 
-    func redo(current: [Annotation]) -> [Annotation]? {
+    func redo(current: EditorSnapshot) -> EditorSnapshot? {
         guard let next = redoStack.popLast() else { return nil }
-        undoStack.append(current.map { $0.copyAnnotation() })
+        undoStack.append(current)
         return next
     }
 }

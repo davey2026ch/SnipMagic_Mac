@@ -22,7 +22,7 @@ enum AppInfo {
     static let name = "截图工具"
     static let bundleID = "com.mimo.screenshottool"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "1.5.5"
+    static let version = "1.5.6"
 }
 
 /// Borderless color swatch: flat rounded fill in the current brush color, no

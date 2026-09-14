@@ -60,8 +60,8 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         stack.addArrangedSubview(title)
 
-        // Classic color wheel: angle = hue, radius = saturation. The
-        // brightness slider below re-shades the whole wheel.
+        // Classic color wheel: angle = hue, radius = saturation, always vivid.
+        // The brightness slider below only darkens the selected color.
         wheel.translatesAutoresizingMaskIntoConstraints = false
         wheel.widthAnchor.constraint(equalToConstant: 210).isActive = true
         wheel.heightAnchor.constraint(equalToConstant: 210).isActive = true
@@ -280,7 +280,6 @@ final class ColorWheelView: NSView {
     private(set) var brightness: CGFloat = 1
 
     private var wheelImage: CGImage?
-    private var renderedBrightness: CGFloat = -1
 
     var currentColor: NSColor {
         NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
@@ -302,7 +301,7 @@ final class ColorWheelView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if wheelImage == nil || abs(renderedBrightness - brightness) > 0.003 {
+        if wheelImage == nil {
             renderWheel()
         }
         if let wheelImage {
@@ -351,8 +350,11 @@ final class ColorWheelView: NSView {
         onColorChange?(currentColor)
     }
 
-    /// Render the wheel bitmap @2x. Flipped coords both here and in the dot
-    /// math keep angle/radius consistent.
+    /// Render the wheel bitmap once @2x, always at FULL brightness — the
+    /// disc itself stays vivid like the classic system wheel; the brightness
+    /// slider only darkens the selected color (the dot), never the disc.
+    /// Flipped coords both here and in the dot math keep angle/radius
+    /// consistent.
     private func renderWheel() {
         let scale: CGFloat = 2
         let dim = Int(bounds.width * scale)
@@ -369,7 +371,7 @@ final class ColorWheelView: NSView {
                 guard dist <= 1 else { continue }
                 var h = atan2(dy, dx) / (2 * .pi)
                 if h < 0 { h += 1 }
-                let (rr, gg, bb) = Self.hsvToRGB(h, dist, brightness)
+                let (rr, gg, bb) = Self.hsvToRGB(h, dist, 1)
                 // ~1.5-device-pixel alpha falloff at the rim to avoid jaggies.
                 let alpha = min(1, (1 - dist) * r / 1.5)
                 buf[idx] = UInt8(rr)
@@ -378,15 +380,17 @@ final class ColorWheelView: NSView {
                 buf[idx + 3] = UInt8(alpha * 255)
             }
         }
-        if let ctx = CGContext(
-            data: &buf,
-            width: dim, height: dim,
-            bitsPerComponent: 8, bytesPerRow: dim * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let img = ctx.makeImage() {
-            wheelImage = img
-            renderedBrightness = brightness
+        // withUnsafeMutableBytes keeps the buffer pointer valid for the whole
+        // context lifetime (a bare `&buf` is only guaranteed for the init call).
+        wheelImage = buf.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(
+                data: raw.baseAddress,
+                width: dim, height: dim,
+                bitsPerComponent: 8, bytesPerRow: dim * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return nil }
+            return ctx.makeImage()
         }
     }
 

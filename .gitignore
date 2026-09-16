@@ -1,5 +1,6 @@
 # Xcode / SwiftPM
 .build/
+.build-*/
 .swiftpm/
 *.xcodeproj
 xcuserdata/

@@ -4,6 +4,30 @@
 
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v2.1.0-blue)
 
+## 核心特点
+
+**1、支持区域截图、长截图，一张图片占据一个 sheet 页签。**
+
+**2、两图对比：显示页签 A 的图像，再右键点击页签 B，实现 AB 两图左右并列显示，默认开启同步滚动。**
+
+**3、框选图片中某个局部区域后：**
+
+- **（1）马赛克**：点击马赛克按钮，对选中区域打码；
+- **（2）移花接木**：使用 `⌘C` `⌘V` 复制、粘贴。可以粘贴到当前图片中、粘贴到其他页签的图片中；
+- **（3）粘贴到外部**：把框选区域复制到剪贴板后，粘贴到文档、微信等外部软件。
+
+**4、同色覆盖（抹除局部元素）：先设置或吸取颜色（全局吸管，动态显示颜色值），再使用实心矩形去遮盖目标区域。**
+
+**5、支持 OCR 提取内容，导出 Markdown、Word、Excel：**
+
+- （1）绝大部分情况下，只能解析出文字 + 表格；
+- （2）部分图文混排的图片，可以解析出文字 + 图片（抠图）；
+- （3）提取完成后，自动写入剪贴板，方便直接粘贴；
+- （4）后台对接免费的 MinerU 接口，Token 申请地址：<https://mineru.net/apiManage/token>；
+- （5）配置文件路径：`~/截图工具`。
+
+**6、支持常规编辑**：文字、画笔、箭头、直线、边框、序号、撤销、重做等。
+
 ## 功能特性
 
 ### 截图
@@ -96,6 +120,8 @@
 ### 下载安装（推荐）
 
 1. 前往 [Releases](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases) 下载最新 `.dmg`；
+   - **Apple Silicon（M 系列）**：下载 `截图工具-v2.1.0.dmg`（arm64）
+   - **Intel Mac**：下载 `截图工具-v2.1.0-x86_64.dmg`（x86_64）
 2. 打开 dmg，将「截图工具」拖入 `Applications` 文件夹；
 3. **首次启动**：因使用 ad-hoc 签名，请在「应用程序」中**右键 → 打开**，再点「打开」以通过 Gatekeeper；
 4. 首次使用需授予**屏幕录制**权限（系统会自动引导，授权后重启应用生效）。
@@ -136,11 +162,19 @@ cd screenshot-tool-Mac
 swift build --disable-sandbox
 swift run ScreenshotTool
 
-# 或直接打包 .app
+# 打包发布（同时产出 arm64 + x86_64 两份 dmg，自动签名 + 验证架构）
 ./build_app.sh
+
+# 也可以单独打某一种架构：
+# ./build_app.sh --native        # 只打 arm64 dmg（Apple Silicon）
+# ./build_app.sh --x86_64        # 只打 x86_64 dmg（Intel Mac）
+# ./build_app.sh --universal     # 打通用二进制 dmg（一包通吃）
+# ./build_app.sh --app-only       # 只打 .app，不打 dmg
 ```
 
 > `--disable-sandbox` 是 SwiftPM 在受限环境下构建的必要参数。
+>
+> **多架构说明**：本机为 Apple Silicon 时，脚本用 `swift build --triple x86_64-apple-macosx14.0.0` 交叉编译 Intel 版本，无需 Intel 机器。Swift 6.4 的 swift build 不支持 `--arch`，必须用 `--triple`；triple 版本号要跟 `Package.swift` 的 `platforms: [.macOS(.v14)]` 对齐。
 
 ## 项目结构
 

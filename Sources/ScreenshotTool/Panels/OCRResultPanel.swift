@@ -3,14 +3,17 @@ import UniformTypeIdentifiers
 
 /// Sheet showing extraction result as Markdown source:
 /// scrollable/editable text + export .md / copy / close.
+/// 有图片时：导出 Markdown 会生成文件夹（md + images/），导出 Word/Excel 会内嵌图片。
 final class ExtractResultPanel: NSViewController {
     private let content: String
     private let mode: ExtractMode
+    private let images: [ExtractedImage]
     private let textView = NSTextView()
 
-    init(content: String, mode: ExtractMode) {
+    init(content: String, mode: ExtractMode, images: [ExtractedImage] = []) {
         self.content = content
         self.mode = mode
+        self.images = images
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -124,20 +127,42 @@ final class ExtractResultPanel: NSViewController {
     // MARK: - Actions
 
     @objc private func exportMarkdownClicked() {
-        runSavePanel(extension: "md") { url in
-            try self.textView.string.write(to: url, atomically: true, encoding: .utf8)
+        if images.isEmpty {
+            runSavePanel(extension: "md") { url in
+                try self.textView.string.write(to: url, atomically: true, encoding: .utf8)
+            }
+        } else {
+            // 有图片：导出为文件夹（md 文件 + images/ 图片目录），保证 md 引用完整可读
+            runFolderPanel { folderURL in
+                try self.writeMarkdownBundle(to: folderURL)
+            }
+        }
+    }
+
+    /// 把 markdown 与图片写入用户选择的文件夹：<文件夹>/<文件夹名>.md + images/…
+    private func writeMarkdownBundle(to folder: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let mdName = folder.lastPathComponent + ".md"
+        try textView.string.write(
+            to: folder.appendingPathComponent(mdName), atomically: true, encoding: .utf8
+        )
+        for img in images {
+            let target = folder.appendingPathComponent(img.path)
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try img.data.write(to: target)
         }
     }
 
     @objc private func exportXlsxClicked() {
         runSavePanel(extension: "xlsx") { url in
-            try OfficeExporter.exportXlsx(markdown: self.textView.string, to: url)
+            try OfficeExporter.exportXlsx(markdown: self.textView.string, images: self.images, to: url)
         }
     }
 
     @objc private func exportDocxClicked() {
         runSavePanel(extension: "docx") { url in
-            try OfficeExporter.exportDocx(markdown: self.textView.string, to: url)
+            try OfficeExporter.exportDocx(markdown: self.textView.string, images: self.images, to: url)
         }
     }
 
@@ -148,6 +173,27 @@ final class ExtractResultPanel: NSViewController {
         savePanel.allowedContentTypes = [UTType(filenameExtension: ext) ?? .data]
         savePanel.nameFieldStringValue = "提取内容-\(formatter.string(from: Date())).\(ext)"
         savePanel.canCreateDirectories = true
+        guard let window = view.window else { return }
+        savePanel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = savePanel.url else { return }
+            do {
+                try onSave(url)
+            } catch {
+                let alert = NSAlert(error: error)
+                alert.runModal()
+            }
+        }
+    }
+
+    /// 选择导出文件夹的位置与名称（无扩展名）。
+    private func runFolderPanel(onSave: @escaping (URL) throws -> Void) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.folder]
+        savePanel.nameFieldStringValue = "提取内容-\(formatter.string(from: Date()))"
+        savePanel.canCreateDirectories = true
+        savePanel.message = "将创建此文件夹，内含 Markdown 文件与 images 图片文件夹"
         guard let window = view.window else { return }
         savePanel.beginSheetModal(for: window) { response in
             guard response == .OK, let url = savePanel.url else { return }

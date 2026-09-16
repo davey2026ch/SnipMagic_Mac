@@ -1023,7 +1023,7 @@ final class EditorViewController: NSViewController {
                     let pb = NSPasteboard.general
                     pb.clearContents()
                     pb.setString(outcome.markdown, forType: .string)
-                    self.presentExtractResult(markdown: outcome.markdown, mode: outcome.mode)
+                    self.presentExtractResult(markdown: outcome.markdown, images: outcome.images, mode: outcome.mode)
                 }
             }
         )
@@ -1113,8 +1113,8 @@ final class EditorViewController: NSViewController {
         ocrProgressPanel = nil
     }
 
-    private func presentExtractResult(markdown: String, mode: ExtractMode) {
-        let panel = ExtractResultPanel(content: markdown, mode: mode)
+    private func presentExtractResult(markdown: String, images: [ExtractedImage] = [], mode: ExtractMode) {
+        let panel = ExtractResultPanel(content: markdown, mode: mode, images: images)
         if let host = view.window?.contentViewController, host !== self {
             host.presentAsSheet(panel)
         } else {

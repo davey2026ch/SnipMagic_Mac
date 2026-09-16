@@ -70,7 +70,7 @@ final class SettingsPanel: NSViewController {
         tokenFieldSeed = minerUToken
     }
 
-    private var timeoutFieldSeed: TimeInterval = 20
+    private var timeoutFieldSeed: TimeInterval = 10
     private var tokenFieldSeed: String = ""
 
     @available(*, unavailable)

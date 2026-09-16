@@ -37,6 +37,13 @@ final class MinerUExtractTask {
     }
 }
 
+/// 提取结果中的图片：精准解析来自结果 zip 的 images/ 目录，
+/// 轻量解析来自 markdown 图片引用的下载；path 为相对 markdown 的路径（如 images/xxx.jpg）。
+struct ExtractedImage {
+    let path: String
+    let data: Data
+}
+
 /// Which MinerU channel produced a successful extraction.
 enum ExtractMode {
     case agent    // 轻量解析（免 token）
@@ -106,8 +113,8 @@ enum MinerUOCRService {
 
     struct MinerUConfig {
         var token: String?
-        /// 轻量级接口等待秒数；超时后降级精准解析（vlm）。默认 20。
-        var agentTimeout: TimeInterval = 20
+    /// 轻量级接口等待秒数；超时后降级精准解析（vlm）。默认 10。
+    var agentTimeout: TimeInterval = 10
         /// 区域截图快捷键（如 Command+Shift+R）。nil = 使用内置默认。
         var captureHotkey: (keyCode: UInt32, modifiers: UInt32)?
         /// 长截图快捷键。nil = 使用内置默认。
@@ -229,12 +236,12 @@ enum MinerUOCRService {
 
     /// Extract Markdown from an image. `onStage` and `completion` are called on the main thread.
     /// Returns a cancellable task; `completion(.failure(.cancelled))` fires immediately on cancel.
-    /// Success carries the Markdown plus the channel (agent / precise) that produced it.
+    /// Success carries the Markdown, any extracted images, and the channel (agent / precise) that produced it.
     static func extract(
         imageData: Data,
         fileName: String = "screenshot.png",
         onStage: @escaping (String) -> Void,
-        completion: @escaping (Result<(markdown: String, mode: ExtractMode), Error>) -> Void
+        completion: @escaping (Result<(markdown: String, images: [ExtractedImage], mode: ExtractMode), Error>) -> Void
     ) -> MinerUExtractTask {
         let task = MinerUExtractTask()
         let config = loadConfig()
@@ -242,7 +249,7 @@ enum MinerUOCRService {
         // Deliver completion exactly once.
         let finishLock = NSLock()
         var finished = false
-        func finish(_ result: Result<(markdown: String, mode: ExtractMode), Error>) {
+        func finish(_ result: Result<(markdown: String, images: [ExtractedImage], mode: ExtractMode), Error>) {
             finishLock.lock()
             let already = finished
             finished = true
@@ -260,17 +267,34 @@ enum MinerUOCRService {
         // ---- 1. Agent 轻量解析（免 Token，等待时长可配置） ----
         runAgent(task: task, imageData: imageData, fileName: fileName, timeout: config.agentTimeout) { agentResult in
             // Treat an empty lightweight result as failure so we can retry with vlm.
-            let effectiveResult: Result<String, Error>
-            if case .success(let md) = agentResult,
-               md.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var effectiveResult = agentResult
+            if case .success(let outcome) = agentResult,
+               outcome.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 effectiveResult = .failure(MinerUOCRError.emptyResult)
-            } else {
-                effectiveResult = agentResult
             }
 
             switch effectiveResult {
-            case .success(let markdown):
-                finish(.success((markdown, .agent)))
+            case .success(let outcome):
+                // 轻量结果对图片只给 <!-- image--> 占位（拿不到真实图片）。
+                // 已配置 token 时改走精准解析以获取可导出的图片；精准失败仍回退轻量结果。
+                if outcome.images.isEmpty,
+                   outcome.markdown.contains("<!-- image"),
+                   let token = config.token, !token.isEmpty {
+                    stage("轻量结果含图片占位，改用精准解析（vlm）获取图片…")
+                    runPrecise(task: task, token: token, imageData: imageData, fileName: fileName) { preciseResult in
+                        switch preciseResult {
+                        case .success(let preciseOutcome):
+                            finish(.success((preciseOutcome.markdown, preciseOutcome.images, .precise)))
+                        case .failure(let preciseError):
+                            guard !task.isCancelled else { return }
+                            if case MinerUOCRError.cancelled = preciseError { return }
+                            stage("精准解析未成功，保留轻量结果")
+                            finish(.success((outcome.markdown, outcome.images, .agent)))
+                        }
+                    }
+                } else {
+                    finish(.success((outcome.markdown, outcome.images, .agent)))
+                }
             case .failure(let error):
                 guard !task.isCancelled else { return } // finish already called by terminate handler
                 if case MinerUOCRError.cancelled = error { return }
@@ -279,8 +303,8 @@ enum MinerUOCRService {
                 // ---- 2. 精准解析 API（vlm） ----
                 runPrecise(task: task, token: config.token, imageData: imageData, fileName: fileName) { preciseResult in
                     switch preciseResult {
-                    case .success(let markdown):
-                        finish(.success((markdown, .precise)))
+                    case .success(let outcome):
+                        finish(.success((outcome.markdown, outcome.images, .precise)))
                     case .failure(let preciseError):
                         guard !task.isCancelled else { return }
                         if case MinerUOCRError.cancelled = preciseError { return }
@@ -306,7 +330,7 @@ enum MinerUOCRService {
         imageData: Data,
         fileName: String,
         timeout: TimeInterval,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping (Result<(markdown: String, images: [ExtractedImage]), Error>) -> Void
     ) {
         let session = URLSession.shared
         agentRequestUploadURL(session: session, fileName: fileName) { result in
@@ -330,13 +354,114 @@ enum MinerUOCRService {
                             case .success(let markdownURL):
                                 downloadText(session: session, from: markdownURL) { mdResult in
                                     guard !task.isCancelled else { return }
-                                    completion(mdResult)
+                                    switch mdResult {
+                                    case .failure(let error):
+                                        completion(.failure(error))
+                                    case .success(let markdown):
+                                        // 轻量结果里的图片引用需要另行下载，才能随导出落盘。
+                                        resolveImages(
+                                            task: task, session: session, markdown: markdown,
+                                            baseURL: markdownURL.deletingLastPathComponent(),
+                                            completion: completion
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    /// 扫描 markdown 中的图片引用并下载：
+    /// 绝对 URL 直接下载，相对路径基于 markdown 所在目录解析。
+    /// 成功下载的引用改写为相对路径 images/<文件名>，失败的单张保留原引用（不阻塞整体结果）。
+    private static func resolveImages(
+        task: MinerUExtractTask,
+        session: URLSession,
+        markdown: String,
+        baseURL: URL,
+        completion: @escaping (Result<(markdown: String, images: [ExtractedImage]), Error>) -> Void
+    ) {
+        guard !task.isCancelled else { return }
+        let pattern = #"!\[[^\]]*\]\(\s*([^)\s]+)\s*\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            completion(.success((markdown, [])))
+            return
+        }
+        let ns = markdown as NSString
+        let matches = regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+        var refs: [String] = []
+        for m in matches where m.numberOfRanges > 1 {
+            let ref = ns.substring(with: m.range(at: 1))
+            if !refs.contains(ref) { refs.append(ref) }
+        }
+        guard !refs.isEmpty else {
+            completion(.success((markdown, [])))
+            return
+        }
+
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var usedNames: Set<String> = []
+        var images: [ExtractedImage] = []
+        var rewrites: [(from: String, to: String)] = []
+
+        for ref in refs {
+            let target: URL?
+            if let u = URL(string: ref), u.scheme == "http" || u.scheme == "https" {
+                target = u
+            } else {
+                target = URL(string: ref, relativeTo: baseURL)?.absoluteURL
+            }
+            guard let url = target else { continue }
+            group.enter()
+            downloadData(session: session, from: url) { result in
+                defer { group.leave() }
+                guard case .success(let data) = result, !data.isEmpty else { return }
+                // 仅收录 Word/Excel 可内嵌的格式（jpg/png/gif），扩展名优先嗅探、URL 后缀兜底。
+                guard let ext = sniffImageExtension(data)
+                    ?? sanitizeExtension(url.pathExtension) else { return }
+                lock.lock()
+                defer { lock.unlock() }
+                var base = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+                if base.hasSuffix("/") || base.isEmpty { base = "image" }
+                let stem = (base as NSString).deletingPathExtension
+                let name = usedNames.contains("\(stem).\(ext)")
+                    ? "\(stem)-\(usedNames.count + 1).\(ext)"
+                    : "\(stem).\(ext)"
+                usedNames.insert(name)
+                let path = "images/\(name)"
+                images.append(ExtractedImage(path: path, data: data))
+                rewrites.append((ref, path))
+            }
+        }
+
+        group.notify(queue: .global()) {
+            guard !task.isCancelled else { return }
+            var md = markdown
+            for r in rewrites {
+                md = md.replacingOccurrences(of: "](\(r.from))", with: "](\(r.to))")
+            }
+            completion(.success((md, images)))
+        }
+    }
+
+    /// 按文件头嗅探图片格式（仅收录 Office 可内嵌的 jpg/png/gif）。
+    private static func sniffImageExtension(_ data: Data) -> String? {
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return "jpg" }
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
+        if data.starts(with: [0x47, 0x49, 0x46]) { return "gif" }
+        return nil
+    }
+
+    private static func sanitizeExtension(_ raw: String) -> String? {
+        switch raw.lowercased() {
+        case "jpg", "jpeg": return "jpg"
+        case "png": return "png"
+        case "gif": return "gif"
+        default: return nil
         }
     }
 
@@ -458,7 +583,7 @@ enum MinerUOCRService {
         token: String?,
         imageData: Data,
         fileName: String,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping (Result<(markdown: String, images: [ExtractedImage]), Error>) -> Void
     ) {
         guard let token, !token.isEmpty else {
             completion(.failure(MinerUOCRError.tokenMissing))
@@ -493,9 +618,9 @@ enum MinerUOCRService {
                                     case .success(let zipData):
                                         DispatchQueue.global().async {
                                             do {
-                                                let md = try markdownFromZip(zipData)
+                                                let outcome = try extractResultFromZip(zipData)
                                                 guard !task.isCancelled else { return }
-                                                completion(.success(md))
+                                                completion(.success(outcome))
                                             } catch {
                                                 guard !task.isCancelled else { return }
                                                 completion(.failure(error))
@@ -662,8 +787,10 @@ enum MinerUOCRService {
         }.resume()
     }
 
-    /// Unzips the v4 result package and returns full.md content.
-    private static func markdownFromZip(_ zipData: Data) throws -> String {
+    /// Unzips the v4 result package and returns full.md content plus the images it ships with
+    /// (e.g. images/xxx.jpg)，路径以 full.md 所在目录为基准。
+    private static func extractResultFromZip(_ zipData: Data) throws
+        -> (markdown: String, images: [ExtractedImage]) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("mineru-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -687,13 +814,30 @@ enum MinerUOCRService {
             throw MinerUOCRError.zipFailed("无法读取结果目录")
         }
         var mdURL: URL?
-        for case let url as URL in enumerator where url.lastPathComponent == "full.md" {
-            mdURL = url
-            break
+        var imageFiles: [URL] = []
+        for case let url as URL in enumerator {
+            if url.lastPathComponent == "full.md" && mdURL == nil {
+                mdURL = url
+            } else if let ext = sanitizeExtension(url.pathExtension), ext != "" {
+                imageFiles.append(url)
+            }
         }
         guard let mdURL, let text = try? String(contentsOf: mdURL, encoding: .utf8) else {
             throw MinerUOCRError.zipFailed("结果包中未找到 full.md")
         }
-        return text
+
+        // 图片路径以 full.md 所在目录为基准，生成相对路径（如 images/xxx.jpg）。
+        let baseDir = mdURL.deletingLastPathComponent()
+        var images: [ExtractedImage] = []
+        for file in imageFiles {
+            // 只保留 zip 内基准目录之下的图片
+            guard file.path.hasPrefix(baseDir.path) else { continue }
+            let rel = String(file.path.dropFirst(baseDir.path.count + 1))
+            guard !rel.isEmpty else { continue }
+            if let data = try? Data(contentsOf: file) {
+                images.append(ExtractedImage(path: rel, data: data))
+            }
+        }
+        return (text, images)
     }
 }

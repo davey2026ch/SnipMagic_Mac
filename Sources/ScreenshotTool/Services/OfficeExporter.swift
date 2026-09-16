@@ -9,6 +9,8 @@ enum MarkdownBlock {
     case paragraph(String)
     /// 行×列的表格单元格；单元格内可用 \n 表示换行。
     case table([[String]])
+    /// 独立成行的图片（如 ![](images/xxx.jpg)）；导出 Word/Excel 时内嵌原图。
+    case image(path: String, alt: String)
 }
 
 enum MarkdownParser {
@@ -74,6 +76,13 @@ enum MarkdownParser {
                 continue
             }
 
+            // 独立成行的图片：解析为图片块（导出 Word/Excel 时内嵌）
+            if let img = standaloneImage(trimmed) {
+                result.append(.image(path: img.path, alt: img.alt))
+                i += 1
+                continue
+            }
+
             // 普通段落：连续非特殊行合并
             var buf: [String] = [cleanInline(trimmed)]
             i += 1
@@ -103,9 +112,10 @@ enum MarkdownParser {
         }
     }
 
-    /// 管道表格单元格清理：<br> 换行、去行内 HTML 标签、解码实体。
+    /// 管道表格单元格清理：HTML 注释、<br> 换行、去行内 HTML 标签、解码实体。
     private static func pipeCellText(_ raw: String) -> String {
         var text = raw
+        text = replace(pattern: #"<!--[\s\S]*?-->"#, in: text, with: "")
         text = replace(pattern: #"<br\s*/?>"#, in: text, with: "\n")
         text = replace(pattern: #"</?(?:b|strong|i|em|sub|sup|u|span|font|code|small|mark)[^>]*>"#, in: text, with: "")
         text = decodeHTMLEntities(text)
@@ -140,9 +150,10 @@ enum MarkdownParser {
         return rows.isEmpty ? nil : rows
     }
 
-    /// HTML 单元格 → 纯文本：<br> 转换行，去标签，解码实体。
+    /// HTML 单元格 → 纯文本：去 HTML 注释、<br> 转换行，去标签，解码实体。
     private static func htmlCellText(_ raw: String) -> String {
         var text = raw
+        text = replace(pattern: #"<!--[\s\S]*?-->"#, in: text, with: "")
         text = replace(pattern: #"<br\s*/?>"#, in: text, with: "\n")
         text = replace(pattern: #"</(p|div|li)>"#, in: text, with: "\n")
         text = replace(pattern: #"<[^>]+>"#, in: text, with: "")
@@ -152,6 +163,21 @@ enum MarkdownParser {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: 独立图片行
+
+    /// 整行就是一张图片（![alt](path)）时解析出 path / alt。
+    private static func standaloneImage(_ line: String) -> (path: String, alt: String)? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("!["),
+              let regex = try? NSRegularExpression(pattern: #"^!\[([^\]]*)\]\(\s*([^)\s]+)\s*\)$"#) else {
+            return nil
+        }
+        let ns = t as NSString
+        guard let m = regex.firstMatch(in: t, range: NSRange(location: 0, length: ns.length)),
+              m.numberOfRanges > 2 else { return nil }
+        return (ns.substring(with: m.range(at: 2)), ns.substring(with: m.range(at: 1)))
     }
 
     // MARK: 行内清理
@@ -167,9 +193,10 @@ enum MarkdownParser {
         return level
     }
 
-    /// 去掉行内 Markdown 标记；图片转为「（图片）」占位；<br> 转换行。
+    /// 去掉行内 Markdown 标记；图片转为「（图片）」占位；<br> 转换行；去 HTML 注释（如轻量结果的 <!-- image--> 占位）。
     static func cleanInline(_ line: String) -> String {
         var text = line
+        text = replace(pattern: #"<!--[\s\S]*?-->"#, in: text, with: "")
         text = replace(pattern: #"<br\s*/?>"#, in: text, with: "\n")
         text = replace(pattern: #"!\[([^\]]*)\]\([^)]*\)"#, in: text, with: { m in
             let alt = m.count > 1 ? m[1] : ""
@@ -261,37 +288,124 @@ enum OfficeExportError: LocalizedError {
     }
 }
 
+/// 待内嵌到 Office 文档中的图片（按 markdown 中出现顺序编号）。
+private struct EmbeddedImage {
+    let refPath: String    // markdown 中的图片路径（如 images/xxx.jpg）
+    let index: Int         // 1 起编号，对应关系 Id rIdImgN 与 media 文件名 imageN.ext
+    let mediaName: String  // 如 image1.png
+    let ext: String        // 规范化扩展名：png / jpeg / gif
+    let data: Data
+}
+
 /// 把 MinerU Markdown 导出为 xlsx / docx（纯代码生成 OOXML，无第三方依赖）。
 /// 表格单元格内的换行：xlsx 用 wrapText 样式，docx 用 <w:br/>。
+/// 图片：markdown 中独立成行的图片块（![](images/xxx.jpg)）会内嵌为原图——
+/// docx 用 word/media + wp:inline 行内图片，xlsx 用 xl/media + drawing 锚定到所在行。
 enum OfficeExporter {
 
     // MARK: - 对外接口
 
-    static func exportXlsx(markdown: String, to url: URL) throws {
+    static func exportXlsx(markdown: String, images: [ExtractedImage] = [], to url: URL) throws {
         let blocks = MarkdownParser.blocks(from: markdown)
-        try writePackage(files: xlsxPackage(blocks: blocks), to: url)
+        try writePackage(files: xlsxPackage(blocks: blocks, images: images), to: url)
     }
 
-    static func exportDocx(markdown: String, to url: URL) throws {
+    static func exportDocx(markdown: String, images: [ExtractedImage] = [], to url: URL) throws {
         let blocks = MarkdownParser.blocks(from: markdown)
-        try writePackage(files: docxPackage(blocks: blocks), to: url)
+        try writePackage(files: docxPackage(blocks: blocks, images: images), to: url)
+    }
+
+    // MARK: - 图片收集与尺寸
+
+    /// 按图片块出现顺序收集可内嵌图片并编号；可按完整路径或文件名兜底匹配。
+    private static func collectMedia(
+        blocks: [MarkdownBlock], images: [ExtractedImage]
+    ) -> (list: [EmbeddedImage], byPath: [String: EmbeddedImage]) {
+        var byPath: [String: Data] = [:]
+        var byBase: [String: Data] = [:]
+        for img in images {
+            byPath[img.path] = img.data
+            byBase[(img.path as NSString).lastPathComponent] = img.data
+        }
+        var list: [EmbeddedImage] = []
+        var seen: Set<String> = []
+        for block in blocks {
+            if case .image(let path, _) = block, !seen.contains(path) {
+                seen.insert(path)
+                guard let data = byPath[path] ?? byBase[(path as NSString).lastPathComponent],
+                      NSBitmapImageRep(data: data) != nil else { continue }
+                let index = list.count + 1
+                let ext = mediaExtension(of: path, data: data)
+                let item = EmbeddedImage(
+                    refPath: path, index: index,
+                    mediaName: "image\(index).\(ext)", ext: ext, data: data
+                )
+                list.append(item)
+            }
+        }
+        return (list, Dictionary(list.map { ($0.refPath, $0) }, uniquingKeysWith: { a, _ in a }))
+    }
+
+    /// 媒体文件扩展名：优先按文件头嗅探，其次按路径后缀，兜底 png。
+    private static func mediaExtension(of path: String, data: Data) -> String {
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return "jpeg" }
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
+        if data.starts(with: [0x47, 0x49, 0x46]) { return "gif" }
+        switch (path as NSString).pathExtension.lowercased() {
+        case "jpg", "jpeg": return "jpeg"
+        case "gif": return "gif"
+        default: return "png"
+        }
+    }
+
+    private static func mime(of ext: String) -> String {
+        switch ext {
+        case "jpeg", "jpg": return "image/jpeg"
+        case "gif": return "image/gif"
+        default: return "image/png"
+        }
+    }
+
+    /// 像素尺寸 → EMU（96dpi，1px = 9525 EMU），超宽时等比缩小到 maxEMU 以内。
+    private static func imageSizeEMU(_ data: Data, maxEMU: Int) -> (cx: Int, cy: Int)? {
+        guard let rep = NSBitmapImageRep(data: data) else { return nil }
+        let w = max(rep.pixelsWide, 1), h = max(rep.pixelsHigh, 1)
+        let rawW = Double(w) * 9525.0
+        let scale = min(1.0, Double(maxEMU) / rawW)
+        return (Int(rawW * scale), Int(Double(h) * 9525.0 * scale))
+    }
+
+    /// [Content_Types].xml 中图片用到的 Default 声明（按实际用到的扩展名生成）。
+    private static func imageContentTypes(_ media: [EmbeddedImage]) -> String {
+        var exts: [String] = []
+        for m in media where !exts.contains(m.ext) { exts.append(m.ext) }
+        return exts.map { "<Default Extension=\"\($0)\" ContentType=\"\(mime(of: $0))\"/>" }.joined()
     }
 
     // MARK: - xlsx
 
-    private static func xlsxPackage(blocks: [MarkdownBlock]) -> [String: String] {
+    private static func xlsxPackage(blocks: [MarkdownBlock], images: [ExtractedImage]) -> [String: Data] {
         let declaration = #"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#
+        let media = collectMedia(blocks: blocks, images: images)
+        var files: [String: Data] = [:]
 
-        let contentTypes = """
+        var contentTypes = """
         \(declaration)
         <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
         <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
         <Default Extension="xml" ContentType="application/xml"/>
+        \(imageContentTypes(media.list))
         <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
         <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
         <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-        </Types>
         """
+        if !media.list.isEmpty {
+            contentTypes += """
+            <Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+            """
+        }
+        contentTypes += "</Types>"
+        files["[Content_Types].xml"] = xmlData(contentTypes)
 
         let rootRels = """
         \(declaration)
@@ -299,6 +413,7 @@ enum OfficeExporter {
         <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
         </Relationships>
         """
+        files["_rels/.rels"] = xmlData(rootRels)
 
         let workbook = """
         \(declaration)
@@ -306,6 +421,7 @@ enum OfficeExporter {
         <sheets><sheet name="提取内容" sheetId="1" r:id="rId1"/></sheets>
         </workbook>
         """
+        files["xl/workbook.xml"] = xmlData(workbook)
 
         let workbookRels = """
         \(declaration)
@@ -314,6 +430,7 @@ enum OfficeExporter {
         <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
         </Relationships>
         """
+        files["xl/_rels/workbook.xml.rels"] = xmlData(workbookRels)
 
         // s=1 自动换行；s=2 自动换行 + 加粗（表头/标题）
         let styles = """
@@ -331,11 +448,13 @@ enum OfficeExporter {
         <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
         </styleSheet>
         """
+        files["xl/styles.xml"] = xmlData(styles)
 
         // 行数据
         var rowsXml: [String] = []
         var columnWidths: [Double] = []
         var rowIndex = 0
+        var drawingEntries: [(row: Int, image: EmbeddedImage)] = []
 
         func noteWidth(_ col: Int, _ text: String) {
             while columnWidths.count <= col { columnWidths.append(8) }
@@ -364,6 +483,15 @@ enum OfficeExporter {
                     }.joined()
                     rowsXml.append("<row r=\"\(rowIndex)\">\(cells)</row>")
                 }
+            case .image(let path, let alt):
+                if let img = media.byPath[path] {
+                    // 图片锚定到当前空行，浮动显示
+                    drawingEntries.append((row: rowIndex, image: img))
+                } else {
+                    // 无法内嵌（格式不支持/缺数据）退化为占位文本
+                    rowIndex += 1
+                    rowsXml.append("<row r=\"\(rowIndex)\">\(cell(col: 0, text: alt.isEmpty ? "（图片）" : alt, bold: false))</row>")
+                }
             }
             // 块之间留一个空行
             rowIndex += 1
@@ -380,37 +508,86 @@ enum OfficeExporter {
             colsXml = ""
         }
 
+        let hasImages = !media.list.isEmpty
         let sheet = """
         \(declaration)
-        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
         \(colsXml)
         <sheetData>\(rowsXml.joined())</sheetData>
+        \(hasImages ? #"<drawing r:id="rIdW1"/>"# : "")
         </worksheet>
         """
+        files["xl/worksheets/sheet1.xml"] = xmlData(sheet)
 
-        return [
-            "[Content_Types].xml": contentTypes,
-            "_rels/.rels": rootRels,
-            "xl/workbook.xml": workbook,
-            "xl/_rels/workbook.xml.rels": workbookRels,
-            "xl/styles.xml": styles,
-            "xl/worksheets/sheet1.xml": sheet
-        ]
+        if hasImages {
+            // 图片最大宽度：约 500px（96dpi）
+            let maxEMU = 4_762_500
+            let anchors = drawingEntries.map { entry -> String in
+                let img = entry.image
+                let size = imageSizeEMU(img.data, maxEMU: maxEMU) ?? (cx: 9525 * 200, cy: 9525 * 150)
+                return """
+                <xdr:oneCellAnchor>
+                <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(entry.row)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+                <xdr:ext cx="\(size.cx)" cy="\(size.cy)"/>
+                <xdr:pic>
+                <xdr:nvPicPr><xdr:cNvPr id="\(img.index)" name="\(img.mediaName)"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>
+                <xdr:blipFill><a:blip r:embed="rIdImg\(img.index)"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+                <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="\(size.cx)" cy="\(size.cy)"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+                </xdr:pic>
+                <xdr:clientData/>
+                </xdr:oneCellAnchor>
+                """
+            }.joined()
+
+            let drawing = """
+            \(declaration)
+            <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            \(anchors)
+            </xdr:wsDr>
+            """
+            files["xl/drawings/drawing1.xml"] = xmlData(drawing)
+
+            let sheetRels = """
+            \(declaration)
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+            <Relationship Id="rIdW1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+            </Relationships>
+            """
+            files["xl/worksheets/_rels/sheet1.xml.rels"] = xmlData(sheetRels)
+
+            let drawingRels = media.list.map { img -> String in
+                "<Relationship Id=\"rIdImg\(img.index)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/\(img.mediaName)\"/>"
+            }.joined()
+            files["xl/drawings/_rels/drawing1.xml.rels"] = xmlData("""
+            \(declaration)
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(drawingRels)</Relationships>
+            """)
+
+            for img in media.list {
+                files["xl/media/\(img.mediaName)"] = img.data
+            }
+        }
+
+        return files
     }
 
     // MARK: - docx
 
-    private static func docxPackage(blocks: [MarkdownBlock]) -> [String: String] {
+    private static func docxPackage(blocks: [MarkdownBlock], images: [ExtractedImage]) -> [String: Data] {
         let declaration = #"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#
+        let media = collectMedia(blocks: blocks, images: images)
+        var files: [String: Data] = [:]
 
         let contentTypes = """
         \(declaration)
         <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
         <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
         <Default Extension="xml" ContentType="application/xml"/>
+        \(imageContentTypes(media.list))
         <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
         </Types>
         """
+        files["[Content_Types].xml"] = xmlData(contentTypes)
 
         let rootRels = """
         \(declaration)
@@ -418,6 +595,17 @@ enum OfficeExporter {
         <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
         </Relationships>
         """
+        files["_rels/.rels"] = xmlData(rootRels)
+
+        if !media.list.isEmpty {
+            let mediaRels = media.list.map { img -> String in
+                "<Relationship Id=\"rIdImg\(img.index)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/\(img.mediaName)\"/>"
+            }.joined()
+            files["word/_rels/document.xml.rels"] = xmlData("""
+            \(declaration)
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(mediaRels)</Relationships>
+            """)
+        }
 
         // 内容
         var body: [String] = []
@@ -449,6 +637,14 @@ enum OfficeExporter {
                 """)
             case .paragraph(let text):
                 body.append("<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr>\(runs(for: text, bold: false))</w:p>")
+            case .image(let path, let alt):
+                if let img = media.byPath[path],
+                   let size = imageSizeEMU(img.data, maxEMU: 5_760_000) {
+                    // 行内图片，最大宽约 620px（A4 可用宽度）
+                    body.append(docxImageParagraph(img, size: size))
+                } else {
+                    body.append("<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr>\(runs(for: alt.isEmpty ? "（图片）" : alt, bold: false))</w:p>")
+                }
             case .table(let rows):
                 let columnCount = rows.map(\.count).max() ?? 1
                 let usableWidth = 9638 // A4 可用宽度（twips）
@@ -487,35 +683,51 @@ enum OfficeExporter {
 
         let document = """
         \(declaration)
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
         <w:body>\(body.joined())<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr></w:body>
         </w:document>
         """
+        files["word/document.xml"] = xmlData(document)
 
-        return [
-            "[Content_Types].xml": contentTypes,
-            "_rels/.rels": rootRels,
-            "word/document.xml": document
-        ]
+        for img in media.list {
+            files["word/media/\(img.mediaName)"] = img.data
+        }
+
+        return files
+    }
+
+    /// docx 行内图片段落（wp:inline）。
+    private static func docxImageParagraph(_ img: EmbeddedImage, size: (cx: Int, cy: Int)) -> String {
+        return """
+        <w:p><w:pPr><w:spacing w:after="120"/></w:pPr><w:r><w:drawing>
+        <wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+        <wp:extent cx="\(size.cx)" cy="\(size.cy)"/><wp:effectExtent l="0" t="0" r="0" b="0"/>
+        <wp:docPr id="\(img.index)" name="Picture \(img.index)"/>
+        <wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>
+        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+        <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+        <pic:nvPicPr><pic:cNvPr id="0" name="\(img.mediaName)"/><pic:cNvPicPr/></pic:nvPicPr>
+        <pic:blipFill><a:blip r:embed="rIdImg\(img.index)"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+        <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="\(size.cx)" cy="\(size.cy)"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+        </pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+        """
     }
 
     // MARK: - 打包
 
     /// 把文件清单写入临时目录后用 /usr/bin/zip 打包为 OOXML 文件。
-    private static func writePackage(files: [String: String], to output: URL) throws {
+    private static func writePackage(files: [String: Data], to output: URL) throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("office-export-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        for (path, content) in files {
+        for (path, data) in files {
             let url = dir.appendingPathComponent(path)
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true
             )
-            guard let data = content.data(using: .utf8) else {
-                throw OfficeExportError.writeFailed(path)
-            }
             try data.write(to: url)
         }
 
@@ -531,6 +743,8 @@ enum OfficeExporter {
             throw OfficeExportError.zipToolFailed("zip 退出码 \(proc.terminationStatus)")
         }
     }
+
+    private static func xmlData(_ s: String) -> Data { Data(s.utf8) }
 
     // MARK: - 小工具
 

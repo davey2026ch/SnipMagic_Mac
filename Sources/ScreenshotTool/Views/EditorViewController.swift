@@ -50,11 +50,12 @@ final class EditorViewController: NSViewController {
     private var sidebarButtons: [NSButton] = []
     private var toolButtons: [ToolKind: NSButton] = [:]
     private var keyMonitor: Any?
-    private var extractTextBtn = NSButton()
-    private var extractTableBtn = NSButton()
+    private var extractContentBtn = NSButton()
     private var isOCRRunning = false
     private var ocrProgressIndicator: NSProgressIndicator?
     private var ocrProgressPanel: NSPanel?
+    private var ocrStageLabel: NSTextField?
+    private var extractTask: MinerUExtractTask?
 
     var onCaptureRequest: (() -> Void)?
     var onLongCaptureRequest: (() -> Void)?
@@ -72,6 +73,10 @@ final class EditorViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // 启动时读取 ~/.截图工具 中的马赛克密度、线条粗细
+        let persisted = MinerUOCRService.loadConfig()
+        style.mosaicCell = persisted.mosaic
+        style.lineWidth = persisted.thickness
         buildLayout()
         bindCanvas()
         refreshEmptyState()
@@ -180,17 +185,15 @@ final class EditorViewController: NSViewController {
         longCaptureBtn.toolTip = "框选区域后滚动页面（网页/文档），自动拼接为长图"
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
-        extractTextBtn = makeToolButton(OCRMode.text.buttonTitle, action: #selector(extractTextClicked))
-        extractTableBtn = makeToolButton(OCRMode.table.buttonTitle, action: #selector(extractTableClicked))
-        extractTextBtn.toolTip = "OCR 识别当前页签图片中的文字（有选区则只识别选区）"
-        extractTableBtn.toolTip = "OCR 识别当前页签图片中的表格（有选区则只识别选区）"
+        extractContentBtn = makeToolButton("📋 提取内容", action: #selector(extractContentClicked))
+        extractContentBtn.toolTip = "OCR 识别当前页签图片中的文字/表格（有选区则只识别选区），结果以 Markdown 返回并自动复制"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
         let saveAllBtn = makeToolButton("💾 全部保存", action: #selector(saveAllTabs))
         saveAllBtn.toolTip = "将全部页签导出到指定文件夹（文件类型可选，默认 PNG；当前页签单张保存用 ⌘S）"
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractTextBtn, extractTableBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractContentBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -949,22 +952,14 @@ final class EditorViewController: NSViewController {
         }
     }
 
-    // MARK: - OCR (MinerU Agent)
+    // MARK: - 内容提取（MinerU：轻量解析优先，失败降级精准解析 vlm）
 
-    @objc private func extractTextClicked() {
-        startOCR(mode: .text)
-    }
-
-    @objc private func extractTableClicked() {
-        startOCR(mode: .table)
-    }
-
-    private func startOCR(mode: OCRMode) {
+    @objc private func extractContentClicked() {
         guard !isOCRRunning else { return }
         guard let tab = currentTab else {
             let a = NSAlert()
             a.messageText = "还没有截图"
-            a.informativeText = "先截一张图，再使用「\(mode.resultTitle)」。"
+            a.informativeText = "先截一张图，再使用「提取内容」。"
             a.runModal()
             return
         }
@@ -986,36 +981,63 @@ final class EditorViewController: NSViewController {
         }
 
         isOCRRunning = true
-        setOCRButtonsEnabled(false)
-        showOCRProgress(mode: mode, scopedToSelection: hasSelection)
+        extractContentBtn.isEnabled = false
+        showOCRProgress(scopedToSelection: hasSelection)
 
-        MinerUOCRService.parse(imageData: png, mode: mode) { [weak self] result in
-            guard let self else { return }
-            self.isOCRRunning = false
-            self.setOCRButtonsEnabled(true)
-            self.hideOCRProgress()
+        extractTask = MinerUOCRService.extract(
+            imageData: png,
+            onStage: { [weak self] stage in
+                self?.ocrStageLabel?.stringValue = stage
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                self.isOCRRunning = false
+                self.extractContentBtn.isEnabled = true
+                self.extractTask = nil
+                self.hideOCRProgress()
 
-            switch result {
-            case .failure(let error):
-                let a = NSAlert()
-                a.messageText = "\(mode.resultTitle)失败"
-                a.informativeText = error.localizedDescription
-                a.runModal()
-            case .success(let text):
-                self.presentOCRResult(mode: mode, text: text)
+                switch result {
+                case .failure(MinerUOCRError.cancelled):
+                    break // user cancelled — no alert
+                case .failure(let error):
+                    let a = NSAlert()
+                    // Token 未配置/不可用：引导用户去设置界面更新
+                    var tokenIssue: MinerUOCRError?
+                    if case MinerUOCRError.tokenMissing? = error as? MinerUOCRError { tokenIssue = .tokenMissing }
+                    if case MinerUOCRError.tokenInvalid(let msg)? = error as? MinerUOCRError { tokenIssue = .tokenInvalid(msg) }
+                    if let tokenIssue {
+                        a.messageText = "需要配置可用的 MinerU Token"
+                        a.informativeText = """
+                        轻量解析失败后需使用精准解析（vlm），但 Token \(tokenIssue.localizedDescription)。
+
+                        请点工具栏「⚙️ 设置」，在「MinerU token」一栏填写或更新后重试。
+                        Token 可在 mineru.net 的「API 管理」页面创建。
+                        """
+                    } else {
+                        a.messageText = "提取内容失败"
+                        a.informativeText = error.localizedDescription
+                    }
+                    a.runModal()
+                case .success(let outcome):
+                    // Auto-copy to clipboard so the user can paste anywhere.
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(outcome.markdown, forType: .string)
+                    self.presentExtractResult(markdown: outcome.markdown, mode: outcome.mode)
+                }
             }
-        }
+        )
     }
 
-    private func setOCRButtonsEnabled(_ enabled: Bool) {
-        extractTextBtn.isEnabled = enabled
-        extractTableBtn.isEnabled = enabled
+    @objc private func cancelExtractClicked() {
+        extractTask?.cancel()
+        // Completion fires with .cancelled and performs the UI cleanup.
     }
 
-    private func showOCRProgress(mode: OCRMode, scopedToSelection: Bool) {
+    private func showOCRProgress(scopedToSelection: Bool) {
         hideOCRProgress()
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 120),
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 190),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -1027,7 +1049,7 @@ final class EditorViewController: NSViewController {
         panel.level = .floating
         panel.isMovableByWindowBackground = true
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 120))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 190))
         panel.contentView = container
 
         let stack = NSStackView()
@@ -1050,7 +1072,7 @@ final class EditorViewController: NSViewController {
         stack.addArrangedSubview(spinner)
         ocrProgressIndicator = spinner
 
-        let label = NSTextField(labelWithString: "正在\(mode.resultTitle)…")
+        let label = NSTextField(labelWithString: "正在提取内容…")
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.alignment = .center
         stack.addArrangedSubview(label)
@@ -1060,6 +1082,13 @@ final class EditorViewController: NSViewController {
         sub.textColor = .secondaryLabelColor
         sub.alignment = .center
         stack.addArrangedSubview(sub)
+        ocrStageLabel = sub
+
+        let cancel = NSButton(title: "取消识别", target: self, action: #selector(cancelExtractClicked))
+        cancel.bezelStyle = .rounded
+        cancel.controlSize = .regular
+        stack.addArrangedSubview(cancel)
+        stack.setCustomSpacing(6, after: cancel)
 
         if let window = view.window {
             panel.center()
@@ -1079,12 +1108,13 @@ final class EditorViewController: NSViewController {
     private func hideOCRProgress() {
         ocrProgressIndicator?.stopAnimation(nil)
         ocrProgressIndicator = nil
+        ocrStageLabel = nil
         ocrProgressPanel?.orderOut(nil)
         ocrProgressPanel = nil
     }
 
-    private func presentOCRResult(mode: OCRMode, text: String) {
-        let panel = OCRResultPanel(mode: mode, content: text)
+    private func presentExtractResult(markdown: String, mode: ExtractMode) {
+        let panel = ExtractResultPanel(content: markdown, mode: mode)
         if let host = view.window?.contentViewController, host !== self {
             host.presentAsSheet(panel)
         } else {
@@ -1115,13 +1145,27 @@ final class EditorViewController: NSViewController {
 
     @objc private func showSettingsPanel() {
         guard view.window != nil else { return }
+        // 反向带出：每次打开都从 ~/.截图工具 现读，保证界面与文件一一对应
+        // （运行中手动改文件后，无需重启即可在此看到并按「确定」生效）
+        let config = MinerUOCRService.loadConfig()
+        let captureText = config.captureHotkey
+            .map { HotkeyService.format(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+            ?? HotkeyService.shared.displayString
+        let longText = config.longHotkey
+            .map { HotkeyService.format(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+            ?? HotkeyService.shared.longDisplayString
         let panel = SettingsPanel(
-            hotkeyDisplay: HotkeyService.shared.displayString,
-            longHotkeyDisplay: HotkeyService.shared.longDisplayString,
-            mosaic: style.mosaicCell,
-            thickness: style.lineWidth
-        ) { [weak self] hotkey, longHotkey, mosaic, thickness in
+            hotkeyDisplay: captureText,
+            longHotkeyDisplay: longText,
+            hotkey: config.captureHotkey ?? HotkeyService.shared.currentHotkey,
+            longHotkey: config.longHotkey ?? HotkeyService.shared.currentLongHotkey,
+            mosaic: config.mosaic,
+            thickness: config.thickness,
+            minerUToken: config.token ?? "",
+            minerUTimeout: config.agentTimeout
+        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout in
             guard let self else { return }
+            // 先应用新值（注册快捷键会同步更新 HotkeyService.current*）
             if let (key, mods) = hotkey {
                 HotkeyService.shared.register(keyCode: key, modifiers: mods)
             } else {
@@ -1141,6 +1185,17 @@ final class EditorViewController: NSViewController {
             if self.canvas.selectedAnnotation != nil {
                 self.canvas.applyCurrentStyleToSelected()
             }
+            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时）写入 ~/.截图工具
+            let savedCapture = HotkeyService.shared.currentHotkey
+            let savedLong = HotkeyService.shared.currentLongHotkey
+            MinerUOCRService.saveConfig(
+                captureHotkey: savedCapture,
+                longHotkey: savedLong,
+                mosaic: mosaic,
+                thickness: thickness,
+                token: minerUToken,
+                agentTimeout: minerUTimeout
+            )
         }
         // Present on the window's content VC — more reliable than self.presentAsSheet
         // when this VC is a plain contentViewController.

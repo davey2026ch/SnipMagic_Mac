@@ -473,7 +473,8 @@ final class CanvasView: NSView {
     }
 
     /// Convert the current selection into a floating pasted layer and start dragging it
-    /// (cut-style: a white patch covers the original pixels; undo restores both).
+    /// (cut-style: the original position is baked white into the base image — NOT a
+    /// separate movable white rectangle; undo restores both).
     private func beginFloatingSelectionMove(at p: CGPoint) {
         guard let tab = tab,
               selectionRect.width > 2, selectionRect.height > 2,
@@ -484,13 +485,14 @@ final class CanvasView: NSView {
         let size = CGSize(width: region.width, height: region.height)
         let rect = selectionRect.standardized
 
-        // White patch stays behind so lifting the layer looks like a cut.
-        let patch = Annotation(
-            kind: .solidRect(rect: rect, rounded: false),
-            color: .white,
-            lineWidth: 1
-        )
-        tab.annotations.append(patch)
+        // Destructive cut: fill the original position with white straight into
+        // the base bitmap. Vector shapes fully inside the selection were already
+        // captured into the floating layer — drop them so they don't reappear
+        // once the layer moves away.
+        tab.annotations.removeAll { rect.contains($0.boundingBox) }
+        if let filled = Self.bakedWhiteFill(in: rect, of: tab.baseImage) {
+            tab.baseImage = filled
+        }
 
         let ann = Annotation(
             kind: .pastedImage(origin: origin, size: size, image: region),
@@ -507,6 +509,25 @@ final class CanvasView: NSView {
         isDragging = true
         onAnnotationsChanged?()
         needsDisplay = true
+    }
+
+    /// Copy of `image` with `rect` (top-left origin, image-pixel coords) filled
+    /// solid white — the destructive half of a cut-move.
+    private static func bakedWhiteFill(in rect: CGRect, of image: CGImage) -> CGImage? {
+        let w = CGFloat(image.width)
+        let h = CGFloat(image.height)
+        let clamped = rect.integral.intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        guard clamped.width >= 1, clamped.height >= 1,
+              let ctx = CGContext(
+                  data: nil, width: Int(w), height: Int(h), bitsPerComponent: 8, bytesPerRow: 0,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // Annotation coords are top-left origin; CG context is bottom-left → flip Y.
+        ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        ctx.fill(CGRect(x: clamped.minX, y: h - clamped.maxY, width: clamped.width, height: clamped.height))
+        return ctx.makeImage()
     }
 
     /// Bake a selected pasted image into the base bitmap so it can no longer be dragged.

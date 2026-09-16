@@ -266,9 +266,9 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     }
 }
 
-/// HSV color wheel: angle = hue, radius = saturation, re-shaded at the current
-/// brightness. Click or drag anywhere on the disc to pick a color — the same
-/// classic look as the system color panel's wheel mode.
+/// HSV color wheel: angle = hue, radius = saturation, always rendered vivid.
+/// Click or drag anywhere on the disc to pick the vivid color shown there —
+/// the brightness slider only darkens the picked color afterwards.
 final class ColorWheelView: NSView {
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -346,6 +346,12 @@ final class ColorWheelView: NSView {
         if h < 0 { h += 1 }
         hue = h
         saturation = dist
+        // WYSIWYG: the disc is always rendered vivid (full brightness), so a
+        // click must pick the vivid color shown at that spot — NOT keep the
+        // previous brightness (e.g. black picked by the eyedropper would
+        // otherwise keep every wheel pick black). syncUI syncs the brightness
+        // slider back to 100.
+        brightness = 1
         needsDisplay = true
         onColorChange?(currentColor)
     }

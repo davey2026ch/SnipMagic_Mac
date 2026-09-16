@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Theme.applyAppearance()
+        MinerUOCRService.ensureConfigFile() // ~/.截图工具 不存在则自动创建
         setupMenu()
 
         editorWindow = EditorWindowController()
@@ -35,6 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.beginCapture()
         }
         HotkeyService.shared.registerDefault()
+        // 配置文件里保存过快捷键则覆盖默认值（设置界面保存时写入）
+        let persisted = MinerUOCRService.loadConfig()
+        if let hk = persisted.captureHotkey {
+            HotkeyService.shared.register(keyCode: hk.keyCode, modifiers: hk.modifiers)
+        }
+        if let lk = persisted.longHotkey {
+            HotkeyService.shared.registerLong(keyCode: lk.keyCode, modifiers: lk.modifiers)
+        }
 
         editorWindow.editorVC.onCaptureRequest = { [weak self] in
             self?.beginCapture()

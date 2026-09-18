@@ -49,6 +49,12 @@ final class CanvasView: NSView {
 
     var tab: EditorTab? {
         didSet {
+            // 涂抹记的是图像坐标，换到另一张图就没意义了。
+            // 但撤销/重做会把同一个 tab 再赋一次值 —— 那种情况必须保留，
+            // 否则刚恢复出来的涂抹痕迹会被自己抹掉（这正是「撤销对刷子不生效」的成因）。
+            if tab !== oldValue {
+                clearEraseStrokes()
+            }
             updateFrameSize()
             needsDisplay = true
         }
@@ -62,6 +68,68 @@ final class CanvasView: NSView {
 
     /// Selection rect drawn by the select tool (image pixels)
     private(set) var selectionRect: CGRect = .zero
+
+    // MARK: - 消除画笔（「魔法消除（高级）」的涂抹选区）
+
+    /// 打开后，画布上的拖动变成涂抹，而不是拉选区或画图形。
+    var eraseBrushActive = false {
+        didSet {
+            if !eraseBrushActive { resetEraseStrokeInProgress() }
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    /// 刷子直径（图像像素）。对外一律用直径 —— 那才是用户能直接感觉到的大小；
+    /// 内部画圆/画线时才换算成半径。
+    var eraseBrushDiameter: CGFloat = 26 {
+        didSet { needsDisplay = true }
+    }
+
+    /// 已落笔的涂抹。
+    private(set) var eraseStrokes: [EraseStroke] = []
+    private var currentStroke: EraseStroke?
+    private var isPaintingStroke = false
+
+    var hasEraseStrokes: Bool { !eraseStrokes.isEmpty || currentStroke != nil }
+
+    /// 清空涂抹痕迹。
+    func clearEraseStrokes() {
+        eraseStrokes.removeAll()
+        resetEraseStrokeInProgress()
+        needsDisplay = true
+    }
+
+    /// 撤销 / 重做要把涂抹整体换回去，所以给一个明确的写入口。
+    func restoreEraseStrokes(_ strokes: [EraseStroke]) {
+        eraseStrokes = strokes
+        resetEraseStrokeInProgress()
+        needsDisplay = true
+    }
+
+    private func resetEraseStrokeInProgress() {
+        currentStroke = nil
+        isPaintingStroke = false
+    }
+
+    /// 追加一个涂抹采样点。挨得太近的点直接丢掉 —— 既没必要，也会拖慢遮罩生成。
+    private func appendErasePoint(_ point: CGPoint) {
+        guard isPaintingStroke, var stroke = currentStroke else { return }
+        if let last = stroke.points.last,
+           hypot(point.x - last.x, point.y - last.y) < max(stroke.radius * 0.3, 2) {
+            return
+        }
+        stroke.points.append(point)
+        currentStroke = stroke
+        needsDisplay = true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if eraseBrushActive {
+            addCursorRect(bounds, cursor: .crosshair)
+        }
+    }
 
     // In-progress drawing
     private var draftKind: AnnotationKind?
@@ -260,6 +328,39 @@ final class CanvasView: NSView {
             drawPenDraft()
             cg.restoreGState()
         }
+
+        // 刷子涂过的地方用半透明红标出来，提交前一目了然
+        let strokes = eraseStrokes + (currentStroke.map { [$0] } ?? [])
+        if !strokes.isEmpty {
+            cg.saveGState()
+            cg.translateBy(x: pad, y: pad)
+            cg.scaleBy(x: 1 / s, y: 1 / s)
+            drawEraseStrokes(strokes)
+            cg.restoreGState()
+        }
+    }
+
+    /// 把涂抹画成半透明红带。调用方已经把上下文缩放成图像像素坐标。
+    private func drawEraseStrokes(_ strokes: [EraseStroke]) {
+        NSColor.systemRed.withAlphaComponent(0.30).setFill()
+        NSColor.systemRed.withAlphaComponent(0.30).setStroke()
+        for stroke in strokes {
+            guard let first = stroke.points.first else { continue }
+            let path = NSBezierPath()
+            path.lineWidth = stroke.radius * 2
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            if stroke.points.count == 1 {
+                // 单点也要看得见 —— 画成圆点
+                path.appendOval(in: CGRect(x: first.x - stroke.radius, y: first.y - stroke.radius,
+                                           width: stroke.radius * 2, height: stroke.radius * 2))
+                path.fill()
+            } else {
+                path.move(to: first)
+                for point in stroke.points.dropFirst() { path.line(to: point) }
+                path.stroke()
+            }
+        }
     }
 
     private func drawHandles(for ann: Annotation) {
@@ -379,10 +480,29 @@ final class CanvasView: NSView {
 
     // MARK: - Mouse
 
+    /// 刷错了就右键清掉重来。
+    override func rightMouseDown(with event: NSEvent) {
+        if eraseBrushActive, hasEraseStrokes {
+            onWillMutate?()   // 清空也是一步操作，同样要能退回来
+            clearEraseStrokes()
+            return
+        }
+        super.rightMouseDown(with: event)
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard tab != nil else { return }
         window?.makeFirstResponder(self)
         let p = imagePoint(from: event)
+
+        if eraseBrushActive {
+            // 每一笔都先存一个快照 —— 刷错了能原样退回去。
+            onWillMutate?()
+            currentStroke = EraseStroke(points: [p], radius: eraseBrushDiameter / 2)
+            isPaintingStroke = true
+            needsDisplay = true
+            return
+        }
 
         // Double-click existing text to re-edit
         if event.clickCount == 2 {
@@ -572,6 +692,11 @@ final class CanvasView: NSView {
         guard tab != nil else { return }
         let p = imagePoint(from: event)
 
+        if eraseBrushActive {
+            appendErasePoint(p)
+            return
+        }
+
         if style.tool == .view { return }
 
         if style.tool == .select {
@@ -618,6 +743,14 @@ final class CanvasView: NSView {
     override func mouseUp(with event: NSEvent) {
         guard tab != nil else { return }
         let p = imagePoint(from: event)
+
+        if eraseBrushActive {
+            // 单击也要留一个圆点，所以直接把当前这一笔收下
+            if let stroke = currentStroke { eraseStrokes.append(stroke) }
+            resetEraseStrokeInProgress()
+            needsDisplay = true
+            return
+        }
 
         defer {
             isDragging = false
@@ -863,10 +996,118 @@ final class CanvasView: NSView {
         guard let region = tab.renderRegion(rect) else { return }
         let cell = max(style.mosaicCell, 2)
         let pixelated = pixelate(region, cell: cell)
-        let ann = Annotation(kind: .mosaic(rect: rect, cellSize: cell, snapshot: pixelated),
-                             color: style.color, lineWidth: style.lineWidth)
         // Bake into the base image immediately — mosaic is a redaction, not a movable layer.
-        bake(annotation: ann, into: &tab.baseImage)
+        bake(snapshot: pixelated, in: rect, crisp: true, into: &tab.baseImage)
+        finishPixelEdit(on: tab)
+    }
+
+    /// 把刷子涂过的地方渲染成与底图同尺寸的单通道遮罩：255 = 擦除，0 = 保留。
+    ///
+    /// 云端 API 要求遮罩图和输入图分辨率一致，所以这里按底图的像素尺寸作画
+    /// （画布上看到的半透明红只是预览，不是最终遮罩）。
+    func renderEraseMask() -> [UInt8]? {
+        guard let tab, hasEraseStrokes else { return nil }
+        let width = tab.baseImage.width
+        let height = tab.baseImage.height
+        guard width > 0, height > 0 else { return nil }
+
+        var mask = [UInt8](repeating: 0, count: width * height)
+        let strokes = eraseStrokes + (currentStroke.map { [$0] } ?? [])
+
+        let drawn = mask.withUnsafeMutableBytes { raw -> Bool in
+            guard let ctx = CGContext(
+                data: raw.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return false }
+
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+            ctx.setStrokeColor(CGColor(gray: 1, alpha: 1))
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+
+            for stroke in strokes {
+                guard let first = stroke.points.first else { continue }
+                ctx.setLineWidth(stroke.radius * 2)
+                // 遮罩位图是 CG 的左下原点，涂抹点是图像的左上原点，y 要翻过来。
+                if stroke.points.count == 1 {
+                    ctx.fillEllipse(in: CGRect(x: first.x - stroke.radius,
+                                               y: CGFloat(height) - first.y - stroke.radius,
+                                               width: stroke.radius * 2,
+                                               height: stroke.radius * 2))
+                } else {
+                    ctx.beginPath()
+                    ctx.move(to: CGPoint(x: first.x, y: CGFloat(height) - first.y))
+                    for point in stroke.points.dropFirst() {
+                        ctx.addLine(to: CGPoint(x: point.x, y: CGFloat(height) - point.y))
+                    }
+                    ctx.strokePath()
+                }
+            }
+            return true
+        }
+        return drawn ? mask : nil
+    }
+
+    /// 魔法消除（高级）：把选区交给火山引擎做云端擦除重建。
+    ///
+    /// 两种选法二选一，刷子优先 —— 那是用户一笔一笔涂出来的，意图最明确；
+    /// 没有涂抹痕迹时退回矩形选区。跟本地版一样是"直接改像素"，收尾走同一套。
+    ///
+    /// - Parameter onStage: 阶段文案，已切回主线程。
+    func applyCloudEraseToSelection(
+        apiKey: String,
+        onStage: @escaping (String) -> Void,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        guard let targetTab = tab, let patch = targetTab.renderComposite() else {
+            completion(.failure(VolcEraseService.EraseError.encodeFailed))
+            return
+        }
+
+        let mask = renderEraseMask()
+        let rect = selectionRect
+        let hasRect = rect.width > 2 && rect.height > 2
+        guard mask != nil || hasRect else {
+            completion(.failure(VolcEraseService.EraseError.noSelection))
+            return
+        }
+
+        let reportStage: (VolcEraseService.Stage) -> Void = { stage in
+            DispatchQueue.main.async { onStage(stage.rawValue) }
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let result: CGImage
+                if let mask {
+                    result = try VolcEraseService.eraseMask(
+                        in: patch, mask: mask, apiKey: apiKey, onStage: reportStage)
+                } else {
+                    result = try VolcEraseService.eraseRect(
+                        in: patch, region: rect, apiKey: apiKey, onStage: reportStage)
+                }
+                DispatchQueue.main.async {
+                    // 云端往返期间用户可能换了页签，别把结果贴到别人身上。
+                    guard let self, let liveTab = self.tab, liveTab === targetTab else {
+                        completion(.failure(VolcEraseService.EraseError.encodeFailed))
+                        return
+                    }
+                    self.onWillMutate?()
+                    liveTab.baseImage = result
+                    self.clearEraseStrokes()
+                    self.finishPixelEdit(on: liveTab)
+                    completion(.success("选区已用云端模型擦除并重建背景"))
+                }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// 直接改像素的操作（马赛克 / 魔法消除）收尾动作一致：落盘标记 + 收选区 + 重绘。
+    private func finishPixelEdit(on tab: EditorTab) {
         tab.markUnsaved()
         clearSelection()
         selectedAnnotation = nil
@@ -874,8 +1115,10 @@ final class CanvasView: NSView {
         needsDisplay = true
     }
 
-    /// Draw one annotation onto a copy of the base bitmap (top-left coords).
-    private func bake(annotation ann: Annotation, into base: inout CGImage) {
+    /// Copy the base bitmap, hand the fresh context to `body`, then adopt
+    /// whatever it drew. Every bake goes through here so the "flatten, draw,
+    /// swap the image" plumbing lives in exactly one place.
+    private func bake(into base: inout CGImage, _ body: (CGContext, Int, Int) -> Void) {
         let w = base.width
         let h = base.height
         guard let ctx = CGContext(
@@ -884,36 +1127,23 @@ final class CanvasView: NSView {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return }
         ctx.draw(base, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-        // Mosaic/paste snapshots are bitmaps — draw them in unflipped CG space
-        // (top-left annotation coords → bottom-left CG y).
-        switch ann.kind {
-        case .mosaic(let rect, _, let snapshot):
-            let r = rect.standardized
-            let cgRect = CGRect(x: r.minX, y: CGFloat(h) - r.maxY, width: r.width, height: r.height)
-            ctx.interpolationQuality = .none
-            ctx.draw(snapshot, in: cgRect)
-        case .pastedImage(let origin, let size, let image):
-            let cgRect = CGRect(
-                x: origin.x,
-                y: CGFloat(h) - origin.y - size.height,
-                width: size.width,
-                height: size.height
-            )
-            ctx.interpolationQuality = .high
-            ctx.draw(image, in: cgRect)
-        default:
-            // Vector annotations still need the top-left flip.
-            ctx.translateBy(x: 0, y: CGFloat(h))
-            ctx.scaleBy(x: 1, y: -1)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
-            AnnotationRenderer.draw(ann, in: ctx, flipped: true)
-            NSGraphicsContext.restoreGraphicsState()
-        }
-
+        body(ctx, w, h)
         if let newImage = ctx.makeImage() {
             base = newImage
+        }
+    }
+
+    /// Paste an already-rendered bitmap back onto the base image. `rect` uses
+    /// annotation coordinates (top-left origin), hence the y-flip.
+    /// `crisp` keeps the exact pixels — right for redactions like mosaic, where
+    /// resampling would smear the block edges. Photographic content (magic
+    /// erase) wants the smoothing instead, so it passes `false`.
+    private func bake(snapshot: CGImage, in rect: CGRect, crisp: Bool, into base: inout CGImage) {
+        bake(into: &base) { ctx, _, h in
+            let r = rect.standardized
+            let cgRect = CGRect(x: r.minX, y: CGFloat(h) - r.maxY, width: r.width, height: r.height)
+            ctx.interpolationQuality = crisp ? .none : .high
+            ctx.draw(snapshot, in: cgRect)
         }
     }
 

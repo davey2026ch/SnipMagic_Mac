@@ -66,6 +66,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.requestScreenPermissionAndGuide()
             }
         }
+
+        // 启动后静默检查更新：只有「发现新版本」才会弹窗征求同意后再下载安装；
+        // 网络不通、已是最新、不是以 .app 运行，都保持安静不打扰。
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(UpdateService.launchCheckDelay * 1_000_000_000))
+            UpdateService.shared.checkOnLaunch()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

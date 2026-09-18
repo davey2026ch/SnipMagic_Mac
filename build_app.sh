@@ -53,6 +53,26 @@ build_one() {
     echo "$scratch/release/$BIN_NAME"
 }
 
+# 固定签名证书：让每次构建的 designated requirement 保持一致
+# （DR = "identifier X and certificate root = H<证书指纹>"，与文件内容无关），
+# 这样自动更新替换 .app 之后，macOS 的屏幕录制等 TCC 授权不会失效。
+# ad-hoc 签名（--sign -）做不到这点：它的 DR 绑在 cdhash 上，每次构建都变。
+# 证书不存在时自动退回 ad-hoc（能跑，只是每次更新后要重新授权）。
+# 生成证书：./create_signing_cert.sh
+SIGN_IDENTITY="ScreenshotTool Self-Signed"
+
+sign_app() {
+    local app="$1"
+    if security find-identity -p codesigning 2>/dev/null | /usr/bin/grep -qF "$SIGN_IDENTITY"; then
+        codesign --force --deep --sign "$SIGN_IDENTITY" "$app"
+        echo "  -> 已用固定证书签名：$SIGN_IDENTITY" >&2
+    else
+        echo "  -> 未找到证书「${SIGN_IDENTITY}」→ 退回 ad-hoc 签名" >&2
+        echo "     （自动更新后需重新授权屏幕录制；跑 ./create_signing_cert.sh 可生成固定证书）" >&2
+        codesign --force --deep --sign - "$app"
+    fi
+}
+
 # assemble_app <binary-path> <app-path>
 assemble_app() {
     local bin="$1"
@@ -67,7 +87,7 @@ assemble_app() {
         cp "$ROOT/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
         /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$app/Contents/Info.plist" || true
     fi
-    codesign --force --deep --sign - "$app"
+    sign_app "$app"
 }
 
 # make_dmg <app-path> <dmg-path>

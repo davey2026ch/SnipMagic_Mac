@@ -3,9 +3,11 @@ import AppKit
 /// Full editor state snapshot. Mosaic and paste-commit bake pixels directly
 /// into the tab's base image, so undo must restore both layers — an
 /// annotations-only snapshot makes mosaic undo appear to do nothing.
+/// 刷子的涂抹痕迹既不是标注、也不改像素，同样得单独带上，否则刷错了退不回去。
 struct EditorSnapshot {
     let annotations: [Annotation]
     let baseImage: CGImage
+    let eraseStrokes: [EraseStroke]
 }
 
 final class UndoStack {

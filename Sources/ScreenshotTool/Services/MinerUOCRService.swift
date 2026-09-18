@@ -124,8 +124,13 @@ enum MinerUOCRService {
         var mosaic: CGFloat = 10
         /// 线条粗细（像素），默认 4。
         var thickness: CGFloat = 4
+        /// 擦除刷直径（像素），默认 26 —— 「魔法消除」刷选区用的刷子。
+        var eraseBrush: CGFloat = 26
         /// 主题模式。老配置文件没有 theme 键 → 默认跟随系统。
         var theme: ThemeMode = .system
+        /// 火山引擎 AI MediaKit 的 API Key，供「魔法消除（高级）」使用。
+        /// 留空则高级版提示去配置，不影响本地的「魔法消除」。
+        var volcKey: String?
 
         /// 与代码内置默认值完全一致的配置。
         static let defaults = MinerUConfig()
@@ -179,9 +184,13 @@ enum MinerUOCRService {
                 if let v = Double(value) { config.mosaic = CGFloat(min(max(v, 2), 64)) }
             case "line_width", "thickness":
                 if let v = Double(value) { config.thickness = CGFloat(min(max(v, 1), 40)) }
+            case "erase_brush", "brush_width", "brush":
+                if let v = Double(value) { config.eraseBrush = CGFloat(min(max(v, 4), 240)) }
             case "theme", "主题":
                 // 缺省 / 值无法识别 → 保持默认（跟随系统）
                 if let m = ThemeMode.parse(value) { config.theme = m }
+            case "volc_key", "volc_api_key", "volcak":
+                if !value.isEmpty { config.volcKey = value }
             default:
                 break
             }
@@ -198,16 +207,20 @@ enum MinerUOCRService {
         thickness: CGFloat,
         token: String?,
         agentTimeout: TimeInterval,
-        theme: ThemeMode
+        theme: ThemeMode,
+        volcKey: String?,
+        eraseBrush: CGFloat
     ) {
         var config = MinerUConfig()
         config.captureHotkey = captureHotkey
         config.longHotkey = longHotkey
         config.mosaic = min(max(mosaic, 2), 64)
         config.thickness = min(max(thickness, 1), 40)
+        config.eraseBrush = min(max(eraseBrush, 4), 240)
         config.token = token
         config.agentTimeout = min(max(agentTimeout, 5), 600)
         config.theme = theme
+        config.volcKey = volcKey
         try? configTemplate(config: config)
             .write(toFile: configPath(), atomically: true, encoding: .utf8)
     }
@@ -228,12 +241,17 @@ enum MinerUOCRService {
         mosaic=\(Int(config.mosaic))
         # 线条粗细（1–40 像素）
         line_width=\(Int(config.thickness))
+        # 擦除刷直径（4–240 像素）：「魔法消除」用刷子刷选区时的笔刷大小，也可在界面上按 [ / ] 临时调整
+        erase_brush=\(Int(config.eraseBrush))
         # MinerU token：精准解析（vlm）接口所需令牌，在 mineru.net 的「API 管理」页面创建；轻量解析无需 token
         token=\(config.token ?? "")
         # 超时时间：轻量级接口的等待秒数，超时后自动降级到精准解析（vlm）；有效范围 5~600
         agent_timeout=\(Int(config.agentTimeout))
         # 主题：dark=暗色 / light=亮色 / system=跟随系统（默认）；本项缺失或无法识别时按「跟随系统」处理
         theme=\(config.theme.configValue)
+        # 火山引擎 AI MediaKit 的 API Key：「魔法消除（高级）」用它做云端擦除与重建，
+        # 在 console.volcengine.com/imp/ai-mediakit/settings 创建；留空则该按钮提示去配置
+        volc_key=\(config.volcKey ?? "")
 
         """
     }

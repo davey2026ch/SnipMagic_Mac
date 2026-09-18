@@ -2,6 +2,9 @@ import AppKit
 
 enum ToolKind: String, CaseIterable {
     case select
+    /// 擦除刷：在画布上刷出「要抹掉的区域」，供「魔法消除（高级）」使用。
+    /// 它不产生标注，只是给云端擦除画选区（比矩形框自由）。
+    case eraseBrush
     case view
     case text
     case arrow
@@ -18,6 +21,7 @@ enum ToolKind: String, CaseIterable {
     var displayName: String {
         switch self {
         case .select: return "选择"
+        case .eraseBrush: return "擦除刷（刷出要抹掉的区域）"
         case .view: return "查看"
         case .text: return "文本"
         case .arrow: return "箭头"
@@ -36,6 +40,7 @@ enum ToolKind: String, CaseIterable {
     var systemImage: String {
         switch self {
         case .select: return "square.dashed"
+        case .eraseBrush: return "paintbrush.pointed"
         case .view: return "eye"
         case .text: return "textformat.alt"
         case .arrow: return "arrow.up.right"
@@ -55,6 +60,7 @@ enum ToolKind: String, CaseIterable {
     var shortLabel: String {
         switch self {
         case .select: return "选"
+        case .eraseBrush: return "刷"
         case .view: return "看"
         case .text: return "T"
         case .arrow: return "↗"
@@ -170,6 +176,15 @@ struct EditorStyle {
     var mosaicCell: CGFloat = 10
     var numberValue: Int = 1
     var tool: ToolKind = .select
+}
+
+/// 一笔刷子涂抹：图像坐标的点串 + 落笔时使用的半径。
+///
+/// 它不产生标注，只是「魔法消除」要抹掉的区域，所以既不进 `annotations`，
+/// 也没法跟着标注一起被画出来 —— 但它**必须进撤销快照**，否则刷错了退不回去。
+struct EraseStroke {
+    var points: [CGPoint]
+    var radius: CGFloat
 }
 
 enum SelectionHandle: CaseIterable {

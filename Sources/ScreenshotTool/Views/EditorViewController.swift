@@ -57,7 +57,13 @@ final class EditorViewController: NSViewController {
     private var toolButtons: [ToolKind: NSButton] = [:]
     private var keyMonitor: Any?
     private var extractContentBtn = NSButton()
+    private var magicEraseBtn = NSButton()
     private var isOCRRunning = false
+    private var isMagicErasing = false
+    /// 耗时操作的浮层：转圈的 spinner + 可随时改的副标题。
+    private var busyPanel: NSPanel?
+    private var busySpinner: NSProgressIndicator?
+    private var busyStageLabel: NSTextField?
     private var ocrProgressIndicator: NSProgressIndicator?
     private var ocrProgressPanel: NSPanel?
     private var ocrStageLabel: NSTextField?
@@ -82,10 +88,11 @@ final class EditorViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // 启动时读取 ~/.截图工具 中的马赛克密度、线条粗细
+        // 启动时读取 ~/.截图工具 中的马赛克密度、线条粗细、擦除刷粗细
         let persisted = MinerUOCRService.loadConfig()
         style.mosaicCell = persisted.mosaic
         style.lineWidth = persisted.thickness
+        canvas.eraseBrushDiameter = persisted.eraseBrush
         buildLayout()
         bindCanvas()
         refreshEmptyState()
@@ -165,6 +172,11 @@ final class EditorViewController: NSViewController {
                 self.saveCurrentTab()
                 return nil
             }
+            // 擦除刷粗细：按 [ 变细、] 变粗。只在擦除刷激活时接管，避免影响别的输入。
+            if self.canvas.eraseBrushActive, !cmd, let key = event.charactersIgnoringModifiers {
+                if key == "[" { self.adjustEraseBrush(delta: -8); return nil }
+                if key == "]" { self.adjustEraseBrush(delta: 8); return nil }
+            }
             if event.keyCode == 51 || event.keyCode == 117 {
                 self.canvas.deleteSelected()
                 return nil
@@ -229,6 +241,8 @@ final class EditorViewController: NSViewController {
         longCaptureBtn.toolTip = "框选区域后滚动页面（网页/文档），自动拼接为长图"
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
+        magicEraseBtn = makeToolButton("🪄 魔法消除", action: #selector(magicEraseClicked))
+        magicEraseBtn.toolTip = "用「擦除刷」刷出要抹掉的部分，或直接用「选择」框一块，再点这里：由火山引擎的图像修复模型重建背景（纹理还原好，图片会上传到火山引擎）"
         extractContentBtn = makeToolButton("📋 提取内容", action: #selector(extractContentClicked))
         extractContentBtn.toolTip = "OCR 识别当前页签图片中的文字/表格（有选区则只识别选区），结果以 Markdown 返回并自动复制"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
@@ -237,7 +251,7 @@ final class EditorViewController: NSViewController {
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractContentBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, longCaptureBtn, mosaicBtn, magicEraseBtn, extractContentBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -304,7 +318,7 @@ final class EditorViewController: NSViewController {
         ])
 
         let tools: [ToolKind] = [
-            .select, .view, .text, .arrow, .line, .pen,
+            .select, .eraseBrush, .view, .text, .arrow, .line, .pen,
             .rect, .roundedRect, .ellipse,
             .solidRect, .solidRoundedRect, .solidEllipse,
             .number
@@ -340,6 +354,7 @@ final class EditorViewController: NSViewController {
             sidebarButtons.append(btn)
             toolButtons[tool] = btn
         }
+        refreshEraseBrushToolTip()
 
         // Color swatch at the very bottom of the tool sidebar, under the
         // number tool. Borderless rounded fill (NSColorWell's black frame
@@ -935,6 +950,9 @@ final class EditorViewController: NSViewController {
     func selectedTool(_ tool: ToolKind, preserveSelection: Bool = false) {
         style.tool = tool
         canvas.style = style
+        // 擦除刷不画图形 —— 它刷出「要抹掉的区域」，画布据此切换事件行为。
+        canvas.eraseBrushActive = (tool == .eraseBrush)
+        refreshEraseBrushToolTip()
         for (t, btn) in toolButtons {
             btn.state = (t == tool) ? .on : .off
         }
@@ -989,11 +1007,184 @@ final class EditorViewController: NSViewController {
             selectedTool(.select, preserveSelection: true)
         }
         if !hadSelection {
-            let a = NSAlert()
-            a.messageText = "请先框选区域"
-            a.informativeText = "用「选择」工具在图上拖一个框，再点「马赛克」打码。"
-            a.runModal()
+            promptForSelection("用「选择」工具在图上拖一个框，再点「马赛克」打码。")
         }
+    }
+
+    // MARK: - 魔法消除（火山引擎 AI MediaKit 云端擦除重建）
+
+    @objc private func magicEraseClicked() {
+        guard !isMagicErasing else { return }
+
+        let apiKey = MinerUOCRService.loadConfig().volcKey ?? ""
+        guard !apiKey.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "还没配置火山引擎 API Key"
+            alert.informativeText = """
+            「魔法消除」把擦除与重建交给火山引擎的图像修复模型，需要先在「设置」里填入 AI MediaKit 的 API Key（在 console.volcengine.com/imp/ai-mediakit/settings 创建）。填一次即可长期使用。
+            """
+            alert.addButton(withTitle: "去设置")
+            alert.addButton(withTitle: "取消")
+            if alert.runModal() == .alertFirstButtonReturn {
+                showSettingsPanel()
+            }
+            return
+        }
+
+        let hasStrokes = canvas.hasEraseStrokes
+        let hasSelection = canvas.selectionRect.width > 2 && canvas.selectionRect.height > 2
+        guard hasStrokes || hasSelection else {
+            let alert = NSAlert()
+            alert.messageText = "请先指定要擦掉的区域"
+            alert.informativeText = """
+            两种方式任选：
+            · 用侧栏的「擦除刷」在图上刷出要抹掉的部分（形状自由）
+            · 或者用「选择」工具拖一个矩形框
+            """
+            alert.runModal()
+            return
+        }
+
+        isMagicErasing = true
+        magicEraseBtn.isEnabled = false
+        showBusyPanel(title: "正在云端重建…",
+                      subtitle: hasStrokes ? "准备上传擦除范围…" : "准备上传选区…")
+
+        canvas.applyCloudEraseToSelection(
+            apiKey: apiKey,
+            onStage: { [weak self] stage in
+                self?.busyStageLabel?.stringValue = stage
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                self.isMagicErasing = false
+                self.magicEraseBtn.isEnabled = true
+                self.hideBusyPanel()
+
+                if self.style.tool != .select {
+                    self.selectedTool(.select, preserveSelection: true)
+                }
+
+                switch result {
+                case .success(let summary):
+                    self.flashStatus("🪄 \(summary)")
+                case .failure(let error):
+                    let alert = NSAlert()
+                    alert.messageText = "云端擦除失败"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
+            }
+        )
+    }
+
+    /// 擦除刷的提示里带上当前笔刷大小，顺手说明怎么调。
+    /// 特意强调「涂满」—— 遮罩没盖到的笔画会被云端当成背景留下来。
+    private func refreshEraseBrushToolTip() {
+        let width = Int(canvas.eraseBrushDiameter)
+        toolButtons[.eraseBrush]?.toolTip = """
+        \(ToolKind.eraseBrush.displayName)
+        在图上按住拖动即可刷出要抹掉的区域，然后点工具栏的「魔法消除」。
+        当前刷子 \(width) px：按 [ 变细，按 ] 变粗；右键可清空重刷。
+        默认粗细在「设置」→「刷子粗细」里改。记得盖满目标 —— 没盖到的部分会被当作背景保留。
+        """
+    }
+
+    /// 调整擦除刷粗细（快捷键 [ 与 ]），步进 8 px。
+    private func adjustEraseBrush(delta: CGFloat) {
+        let next = min(max(canvas.eraseBrushDiameter + delta, 4), 240)
+        guard next != canvas.eraseBrushDiameter else { return }
+        canvas.eraseBrushDiameter = next
+        refreshEraseBrushToolTip()
+        flashStatus("刷子粗细：\(Int(next)) px")
+    }
+
+    /// 框选类操作（马赛克 / 魔法消除）缺选区时的统一提示。
+    private func promptForSelection(_ hint: String) {
+        let alert = NSAlert()
+        alert.messageText = "请先框选区域"
+        alert.informativeText = hint
+        alert.runModal()
+    }
+
+    /// 消除期间盖一块进度浮层。首次跑要等 Vision 加载识别模型（约 10 秒），
+    // MARK: - 耗时操作的浮层（本地 / 云端魔法消除共用）
+
+    /// 弹一个带转圈的小浮层，返回副标题 label 供随时改阶段文案。
+    @discardableResult
+    private func showBusyPanel(title: String, subtitle: String) -> NSTextField {
+        hideBusyPanel()
+
+        let size = NSSize(width: 320, height: 132)
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = ""
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isReleasedWhenClosed = false
+        panel.level = .floating
+        panel.isMovableByWindowBackground = true
+
+        let container = NSView(frame: NSRect(origin: .zero, size: size))
+        panel.contentView = container
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16)
+        ])
+
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+        stack.addArrangedSubview(spinner)
+        busySpinner = spinner
+
+        let heading = NSTextField(labelWithString: title)
+        heading.font = .systemFont(ofSize: 13, weight: .medium)
+        heading.alignment = .center
+        stack.addArrangedSubview(heading)
+
+        let stage = NSTextField(labelWithString: subtitle)
+        stage.font = .systemFont(ofSize: 11)
+        stage.textColor = .secondaryLabelColor
+        stage.alignment = .center
+        stage.lineBreakMode = .byWordWrapping
+        stage.maximumNumberOfLines = 3
+        stage.preferredMaxLayoutWidth = 270
+        stack.addArrangedSubview(stage)
+        busyStageLabel = stage
+
+        if let screen = view.window?.screen ?? NSScreen.main {
+            let frame = panel.frame
+            panel.setFrameOrigin(NSPoint(
+                x: screen.visibleFrame.midX - frame.width / 2,
+                y: screen.visibleFrame.midY - frame.height / 2 + 40
+            ))
+        }
+        panel.orderFrontRegardless()
+        busyPanel = panel
+        return stage
+    }
+
+    private func hideBusyPanel() {
+        busySpinner?.stopAnimation(nil)
+        busySpinner = nil
+        busyStageLabel = nil
+        busyPanel?.orderOut(nil)
+        busyPanel = nil
     }
 
     // MARK: - 内容提取（MinerU：轻量解析优先，失败降级精准解析 vlm）
@@ -1207,8 +1398,10 @@ final class EditorViewController: NSViewController {
             thickness: config.thickness,
             minerUToken: config.token ?? "",
             minerUTimeout: config.agentTimeout,
-            theme: config.theme
-        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme in
+            theme: config.theme,
+            volcKey: config.volcKey ?? "",
+            eraseBrush: config.eraseBrush
+        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme, volcKey, eraseBrush in
             guard let self else { return }
             // 先应用新值（注册快捷键会同步更新 HotkeyService.current*）
             if let (key, mods) = hotkey {
@@ -1226,13 +1419,14 @@ final class EditorViewController: NSViewController {
             self.applyShortcutHints()
             self.style.mosaicCell = mosaic
             self.style.lineWidth = thickness
+            self.canvas.eraseBrushDiameter = eraseBrush
             self.canvas.style = self.style
             if self.canvas.selectedAnnotation != nil {
                 self.canvas.applyCurrentStyleToSelected()
             }
             // 主题：立刻应用（整窗跟随 appearance + 自绘 layer 重新取色）
             Theme.apply(mode: theme)
-            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题）写入 ~/.截图工具
+            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题/火山 key）写入 ~/.截图工具
             let savedCapture = HotkeyService.shared.currentHotkey
             let savedLong = HotkeyService.shared.currentLongHotkey
             MinerUOCRService.saveConfig(
@@ -1242,7 +1436,9 @@ final class EditorViewController: NSViewController {
                 thickness: thickness,
                 token: minerUToken,
                 agentTimeout: minerUTimeout,
-                theme: theme
+                theme: theme,
+                volcKey: volcKey,
+                eraseBrush: eraseBrush
             )
         }
         // Present on the window's content VC — more reliable than self.presentAsSheet
@@ -1258,13 +1454,17 @@ final class EditorViewController: NSViewController {
         guard let tab = currentTab, let stack = undoByTab[tab.id] else { return }
         let current = EditorSnapshot(
             annotations: tab.annotations.map { $0.copyAnnotation() },
-            baseImage: tab.baseImage
+            baseImage: tab.baseImage,
+            eraseStrokes: canvas.eraseStrokes
         )
         if let prev = stack.undo(current: current) {
             tab.annotations = prev.annotations
             tab.baseImage = prev.baseImage
             canvas.selectedAnnotation = nil
             canvas.tab = tab
+            // 必须放在 canvas.tab 之后：赋值本身不会再清（同一个 tab），
+            // 但顺序反了会被 didSet 里的清空逻辑吃掉。
+            canvas.restoreEraseStrokes(prev.eraseStrokes)
             canvas.needsDisplay = true
             refreshStatus()
             refreshTabs()
@@ -1275,13 +1475,15 @@ final class EditorViewController: NSViewController {
         guard let tab = currentTab, let stack = undoByTab[tab.id] else { return }
         let current = EditorSnapshot(
             annotations: tab.annotations.map { $0.copyAnnotation() },
-            baseImage: tab.baseImage
+            baseImage: tab.baseImage,
+            eraseStrokes: canvas.eraseStrokes
         )
         if let next = stack.redo(current: current) {
             tab.annotations = next.annotations
             tab.baseImage = next.baseImage
             canvas.selectedAnnotation = nil
             canvas.tab = tab
+            canvas.restoreEraseStrokes(next.eraseStrokes)
             canvas.needsDisplay = true
             refreshStatus()
             refreshTabs()
@@ -1298,9 +1500,11 @@ final class EditorViewController: NSViewController {
         // Deep-ish snapshot: new array with copied Annotation objects, plus the
         // (immutable) base image reference — mosaic/paste commits bake pixels
         // into the base image, so undo must capture it too.
+        // 涂抹痕迹同理：它不改像素也不进 annotations，漏掉就成了「撤销对刷子没反应」。
         let snapshot = EditorSnapshot(
             annotations: tab.annotations.map { $0.copyAnnotation() },
-            baseImage: tab.baseImage
+            baseImage: tab.baseImage,
+            eraseStrokes: canvas.eraseStrokes
         )
         stack.push(snapshot)
     }

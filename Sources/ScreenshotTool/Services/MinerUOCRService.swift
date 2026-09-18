@@ -128,8 +128,8 @@ enum MinerUOCRService {
         var eraseBrush: CGFloat = 26
         /// 主题模式。老配置文件没有 theme 键 → 默认跟随系统。
         var theme: ThemeMode = .system
-        /// 火山引擎 AI MediaKit 的 API Key，供「魔法消除（高级）」使用。
-        /// 留空则高级版提示去配置，不影响本地的「魔法消除」。
+        /// 火山引擎 AI MediaKit 的 API Key：「魔法消除」的云端擦除重建全靠它。
+        /// 留空时点该按钮会提示去配置。
         var volcKey: String?
 
         /// 与代码内置默认值完全一致的配置。
@@ -249,7 +249,7 @@ enum MinerUOCRService {
         agent_timeout=\(Int(config.agentTimeout))
         # 主题：dark=暗色 / light=亮色 / system=跟随系统（默认）；本项缺失或无法识别时按「跟随系统」处理
         theme=\(config.theme.configValue)
-        # 火山引擎 AI MediaKit 的 API Key：「魔法消除（高级）」用它做云端擦除与重建，
+        # 火山引擎 AI MediaKit 的 API Key：「魔法消除」用它做云端擦除与重建，
         # 在 console.volcengine.com/imp/ai-mediakit/settings 创建；留空则该按钮提示去配置
         volc_key=\(config.volcKey ?? "")
 

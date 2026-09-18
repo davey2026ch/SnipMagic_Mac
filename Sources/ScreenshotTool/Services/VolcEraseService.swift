@@ -61,7 +61,7 @@ enum VolcEraseService {
         var errorDescription: String? {
             switch self {
             case .missingAPIKey:
-                return "还没配置火山引擎 API Key。打开「设置」填入后再试，或改用本地的「魔法消除」。"
+                return "还没配置火山引擎 API Key。请到「设置」→「火山 API Key」填入后再试。"
             case .noSelection:
                 return "请先框选区域，或用刷子涂出要擦掉的范围。"
             case .encodeFailed:

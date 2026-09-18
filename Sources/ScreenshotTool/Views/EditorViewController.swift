@@ -1107,8 +1107,7 @@ final class EditorViewController: NSViewController {
         alert.runModal()
     }
 
-    /// 消除期间盖一块进度浮层。首次跑要等 Vision 加载识别模型（约 10 秒），
-    // MARK: - 耗时操作的浮层（本地 / 云端魔法消除共用）
+    // MARK: - 耗时操作的浮层（魔法消除走云端时盖住画布）
 
     /// 弹一个带转圈的小浮层，返回副标题 label 供随时改阶段文案。
     @discardableResult

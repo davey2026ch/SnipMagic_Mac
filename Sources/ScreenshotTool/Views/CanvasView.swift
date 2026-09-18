@@ -69,7 +69,7 @@ final class CanvasView: NSView {
     /// Selection rect drawn by the select tool (image pixels)
     private(set) var selectionRect: CGRect = .zero
 
-    // MARK: - 消除画笔（「魔法消除（高级）」的涂抹选区）
+    // MARK: - 消除画笔（「魔法消除」的涂抹选区）
 
     /// 打开后，画布上的拖动变成涂抹，而不是拉选区或画图形。
     var eraseBrushActive = false {
@@ -1050,10 +1050,10 @@ final class CanvasView: NSView {
         return drawn ? mask : nil
     }
 
-    /// 魔法消除（高级）：把选区交给火山引擎做云端擦除重建。
+    /// 魔法消除：把选区交给火山引擎做云端擦除重建。
     ///
     /// 两种选法二选一，刷子优先 —— 那是用户一笔一笔涂出来的，意图最明确；
-    /// 没有涂抹痕迹时退回矩形选区。跟本地版一样是"直接改像素"，收尾走同一套。
+    /// 没有涂抹痕迹时退回矩形选区。跟马赛克一样是"直接改像素"，收尾走同一套。
     ///
     /// - Parameter onStage: 阶段文案，已切回主线程。
     func applyCloudEraseToSelection(

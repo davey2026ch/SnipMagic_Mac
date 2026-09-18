@@ -2,7 +2,7 @@
 
 一款用 Swift 编写的 macOS 原生截图工具：区域截图、滚动长截图、多页签标注编辑、左右对比、缩放、取色、OCR 文字/表格识别，开箱即用。
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v2.4.0-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v3.0.1-blue)
 
 [English](README.en.md) | 简体中文
 
@@ -179,8 +179,8 @@
 ### 下载安装（推荐）
 
 1. 前往 [Releases](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases) 下载最新 `.dmg`；
-   - **Apple Silicon（M 系列）**：下载 `截图工具-v2.4.0.dmg`（arm64）
-   - **Intel Mac**：下载 `截图工具-v2.4.0-x86_64.dmg`（x86_64）
+   - **Apple Silicon（M 系列）**：下载 `截图工具-v3.0.1.dmg`（arm64）
+   - **Intel Mac**：下载 `截图工具-v3.0.1-x86_64.dmg`（x86_64）
 2. 打开 dmg，将「截图工具」拖入 `Applications` 文件夹；
 3. **首次启动**：因使用自签名证书，请在「应用程序」中**右键 → 打开**，再点「打开」以通过 Gatekeeper；
 4. 首次使用需授予**屏幕录制**权限（系统会自动引导，授权后重启应用生效）。
@@ -253,7 +253,7 @@ swift run ScreenshotTool
 >
 > **多架构说明**：本机为 Apple Silicon 时，脚本用 `swift build --triple x86_64-apple-macosx14.0.0` 交叉编译 Intel 版本，无需 Intel 机器。Swift 6.4 的 swift build 不支持 `--arch`，必须用 `--triple`；triple 版本号要跟 `Package.swift` 的 `platforms: [.macOS(.v14)]` 对齐。
 >
-> **架构约定**：`dist/截图工具.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图工具-v2.4.0.dmg` = arm64，`截图工具-v2.4.0-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
+> **架构约定**：`dist/截图工具.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图工具-v3.0.1.dmg` = arm64，`截图工具-v3.0.1-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
 
 ## 项目结构
 

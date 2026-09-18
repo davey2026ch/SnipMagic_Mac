@@ -2,7 +2,7 @@ import AppKit
 
 enum ToolKind: String, CaseIterable {
     case select
-    /// 擦除刷：在画布上刷出「要抹掉的区域」，供「魔法消除（高级）」使用。
+    /// 擦除刷：在画布上刷出「要抹掉的区域」，供「魔法消除」使用。
     /// 它不产生标注，只是给云端擦除画选区（比矩形框自由）。
     case eraseBrush
     case view

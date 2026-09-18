@@ -185,12 +185,14 @@ swift run ScreenshotTool
 # ./build_app.sh --native        # 只打 arm64 dmg（Apple Silicon）
 # ./build_app.sh --x86_64        # 只打 x86_64 dmg（Intel Mac）
 # ./build_app.sh --universal     # 打通用二进制 dmg（一包通吃）
-# ./build_app.sh --app-only       # 只打 .app，不打 dmg
+# ./build_app.sh --app-only      # 只打 .app，不打 dmg
 ```
 
 > `--disable-sandbox` 是 SwiftPM 在受限环境下构建的必要参数。
 >
 > **多架构说明**：本机为 Apple Silicon 时，脚本用 `swift build --triple x86_64-apple-macosx14.0.0` 交叉编译 Intel 版本，无需 Intel 机器。Swift 6.4 的 swift build 不支持 `--arch`，必须用 `--triple`；triple 版本号要跟 `Package.swift` 的 `platforms: [.macOS(.v14)]` 对齐。
+>
+> **架构约定**：`dist/截图工具.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图工具-v2.2.0.dmg` = arm64，`截图工具-v2.2.0-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
 
 ## 项目结构
 

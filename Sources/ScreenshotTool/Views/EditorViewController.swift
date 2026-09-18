@@ -46,6 +46,12 @@ final class EditorViewController: NSViewController {
     private var normalTrailingConstraint: NSLayoutConstraint!
     private var compareConstraints: [NSLayoutConstraint] = []
     private var tabDragIndex: Int?
+    /// 主题变更通知的监听令牌。
+    private var themeObserver: NSObjectProtocol?
+    /// buildLayout 完成后才允许重新套用主题配色（避免过早访问 lazy 视图）。
+    private var layoutBuilt = false
+    /// 防重入：applyThemeColors 内部会重建页签，可能再次触发 appearance 回调。
+    private var isApplyingTheme = false
 
     private var sidebarButtons: [NSButton] = []
     private var toolButtons: [ToolKind: NSButton] = [:]
@@ -66,7 +72,10 @@ final class EditorViewController: NSViewController {
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 800))
+        // AppearanceAwareView: 系统亮/暗切换（主题=跟随系统时）也要重新取色。
+        let root = AppearanceAwareView(frame: NSRect(x: 0, y: 0, width: 1200, height: 800))
+        root.onAppearanceChange = { [weak self] in self?.applyThemeColors() }
+        view = root
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.windowBackground.cgColor
     }
@@ -81,6 +90,13 @@ final class EditorViewController: NSViewController {
         bindCanvas()
         refreshEmptyState()
         applyShortcutHints()
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: .appThemeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyThemeColors()
+        }
     }
 
     override func viewDidAppear() {
@@ -90,7 +106,33 @@ final class EditorViewController: NSViewController {
 
     deinit {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         scrollObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    // MARK: - Theme
+
+    /// 重新套用主题配色。`.cgColor` 是取值瞬间的快照，切换主题（或系统亮/暗切换）
+    /// 后必须重取一次，否则自绘的 layer 背景会停留在旧配色。
+    /// 幂等：可被通知与 viewDidChangeEffectiveAppearance 同时触发。
+    func applyThemeColors() {
+        guard isViewLoaded, layoutBuilt, !isApplyingTheme else { return }
+        isApplyingTheme = true
+        defer { isApplyingTheme = false }
+        view.layer?.backgroundColor = Theme.windowBackground.cgColor
+        toolbar.layer?.backgroundColor = Theme.toolbarBackground.cgColor
+        bodyContainer.layer?.backgroundColor = Theme.windowBackground.cgColor
+        sidebar.layer?.backgroundColor = Theme.sidebarBackground.cgColor
+        tabContainer.layer?.backgroundColor = Theme.toolbarBackground.cgColor
+        statusContainer.layer?.backgroundColor = Theme.windowBackground.cgColor
+        scroll.backgroundColor = Theme.canvasBackground
+        compareScroll.backgroundColor = Theme.canvasBackground
+        compareDivider.layer?.backgroundColor = Theme.resolved(NSColor.separatorColor)
+        compareHint.layer?.backgroundColor = Theme.accent.withAlphaComponent(0.12).cgColor
+        compareHint.layer?.borderColor = Theme.accent.withAlphaComponent(0.55).cgColor
+        rebuildTabs()   // 页签 chip 的底色也需要按新主题重取
+        canvas.needsDisplay = true
+        view.needsDisplay = true
     }
 
     private func installKeyMonitor() {
@@ -155,6 +197,8 @@ final class EditorViewController: NSViewController {
         rootStack.addArrangedSubview(bodyContainer)
         rootStack.addArrangedSubview(tabContainer)
         rootStack.addArrangedSubview(statusContainer)
+
+        layoutBuilt = true
     }
 
     private lazy var bodyContainer = NSView()
@@ -367,7 +411,7 @@ final class EditorViewController: NSViewController {
         }
         compareDivider.translatesAutoresizingMaskIntoConstraints = false
         compareDivider.wantsLayer = true
-        compareDivider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        compareDivider.layer?.backgroundColor = Theme.resolved(NSColor.separatorColor)
         compareDivider.isHidden = true
         bodyContainer.addSubview(compareDivider)
 
@@ -629,7 +673,7 @@ final class EditorViewController: NSViewController {
         let hairline = NSView()
         hairline.translatesAutoresizingMaskIntoConstraints = false
         hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        hairline.layer?.backgroundColor = Theme.resolved(NSColor.separatorColor.withAlphaComponent(0.5))
         tabContainer.addSubview(hairline)
         NSLayoutConstraint.activate([
             hairline.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor),
@@ -667,7 +711,7 @@ final class EditorViewController: NSViewController {
 
         hintLabel.font = .systemFont(ofSize: 11)
         hintLabel.textColor = .tertiaryLabelColor
-        hintLabel.stringValue = "截图已包含鼠标箭头"
+        hintLabel.stringValue = "截图不含鼠标箭头 / 鼠标手势"
         stack.addArrangedSubview(hintLabel)
     }
 
@@ -1162,8 +1206,9 @@ final class EditorViewController: NSViewController {
             mosaic: config.mosaic,
             thickness: config.thickness,
             minerUToken: config.token ?? "",
-            minerUTimeout: config.agentTimeout
-        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout in
+            minerUTimeout: config.agentTimeout,
+            theme: config.theme
+        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme in
             guard let self else { return }
             // 先应用新值（注册快捷键会同步更新 HotkeyService.current*）
             if let (key, mods) = hotkey {
@@ -1185,7 +1230,9 @@ final class EditorViewController: NSViewController {
             if self.canvas.selectedAnnotation != nil {
                 self.canvas.applyCurrentStyleToSelected()
             }
-            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时）写入 ~/.截图工具
+            // 主题：立刻应用（整窗跟随 appearance + 自绘 layer 重新取色）
+            Theme.apply(mode: theme)
+            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题）写入 ~/.截图工具
             let savedCapture = HotkeyService.shared.currentHotkey
             let savedLong = HotkeyService.shared.currentLongHotkey
             MinerUOCRService.saveConfig(
@@ -1194,7 +1241,8 @@ final class EditorViewController: NSViewController {
                 mosaic: mosaic,
                 thickness: thickness,
                 token: minerUToken,
-                agentTimeout: minerUTimeout
+                agentTimeout: minerUTimeout,
+                theme: theme
             )
         }
         // Present on the window's content VC — more reliable than self.presentAsSheet

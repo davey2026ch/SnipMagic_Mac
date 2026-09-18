@@ -1,20 +1,137 @@
 import AppKit
 
+/// 主题模式，对应配置文件 ~/.截图工具 中的 `theme` 键。
+/// 文件里没有这一项（老版本升级上来的配置）或值非法时，一律按 `.system`（跟随系统）处理。
+enum ThemeMode: String {
+    case system
+    case light
+    case dark
+
+    /// 解析配置文件取值；兼容大小写、中文写法、"自动/auto" 等常见写法。
+    /// 返回 nil 表示无法识别（调用方保持默认值）。
+    static func parse(_ raw: String) -> ThemeMode? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch value {
+        case "dark", "darkaqua", "暗色", "深色", "黑色":
+            return .dark
+        case "light", "aqua", "亮色", "浅色", "白色":
+            return .light
+        case "system", "auto", "follow", "跟随系统", "自动", "系统":
+            return .system
+        default:
+            return nil
+        }
+    }
+
+    /// 写入配置文件的值（始终使用英文枚举名，便于跨版本稳定解析）。
+    var configValue: String { rawValue }
+
+    /// 设置界面里显示的中文名称。
+    var displayName: String {
+        switch self {
+        case .dark: return "暗色"
+        case .light: return "亮色"
+        case .system: return "跟随系统"
+        }
+    }
+
+    /// 设置界面下拉框的展示顺序。
+    static let displayOrder: [ThemeMode] = [.dark, .light, .system]
+}
+
+extension Notification.Name {
+    /// 主题切换后广播：用 layer 背景色（`.cgColor` 是取值瞬间的快照）自绘的视图
+    /// 需要重新取一次色。
+    static let appThemeDidChange = Notification.Name("com.mimo.screenshottool.themeDidChange")
+}
+
 enum Theme {
-    static let windowBackground = NSColor(calibratedWhite: 0.96, alpha: 1)
-    static let toolbarBackground = NSColor(calibratedWhite: 0.98, alpha: 1)
-    static let sidebarBackground = NSColor(calibratedWhite: 0.97, alpha: 1)
-    static let canvasBackground = NSColor(calibratedRed: 0.93, green: 0.94, blue: 0.96, alpha: 1)
+    // MARK: - Mode
+
+    private(set) static var mode: ThemeMode = .system
+
+    /// 当前是否应使用暗色配色。`.system` 时按系统/当前 appearance 判定。
+    static var isDark: Bool {
+        switch mode {
+        case .dark:
+            return true
+        case .light:
+            return false
+        case .system:
+            let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
+            return appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        }
+    }
+
+    /// 应用主题：设置全局 appearance 并广播刷新。
+    /// - system → `NSApp.appearance = nil`（跟随系统）
+    /// - light  → `.aqua`
+    /// - dark   → `.darkAqua`
+    static func apply(mode newMode: ThemeMode) {
+        mode = newMode
+        switch newMode {
+        case .system:
+            NSApp.appearance = nil
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+        NotificationCenter.default.post(name: .appThemeDidChange, object: nil)
+    }
+
+    // MARK: - Colors
+    // 亮色沿用原有取值；暗色用偏灰的黑（#212121 一带）而不是纯黑 + 纯白，
+    // 对比度够但不刺眼。
+
+    static var windowBackground: NSColor {
+        isDark ? NSColor(calibratedWhite: 0.13, alpha: 1) : NSColor(calibratedWhite: 0.96, alpha: 1)
+    }
+
+    static var toolbarBackground: NSColor {
+        isDark ? NSColor(calibratedWhite: 0.17, alpha: 1) : NSColor(calibratedWhite: 0.98, alpha: 1)
+    }
+
+    static var sidebarBackground: NSColor {
+        isDark ? NSColor(calibratedWhite: 0.16, alpha: 1) : NSColor(calibratedWhite: 0.97, alpha: 1)
+    }
+
+    static var canvasBackground: NSColor {
+        isDark
+            ? NSColor(calibratedWhite: 0.09, alpha: 1)
+            : NSColor(calibratedRed: 0.93, green: 0.94, blue: 0.96, alpha: 1)
+    }
+
     /// Same blue as the active P1/P2 tab.
-    static let accent = NSColor.systemBlue
-    static let accentPressed = NSColor.systemBlue.withAlphaComponent(0.82)
-    static let danger = NSColor.systemRed
-    static let mutedText = NSColor.secondaryLabelColor
+    static var accent: NSColor { NSColor.systemBlue }
+    static var accentPressed: NSColor { NSColor.systemBlue.withAlphaComponent(0.82) }
+    static var danger: NSColor { NSColor.systemRed }
+    static var mutedText: NSColor { NSColor.secondaryLabelColor }
 
     static let cornerRadius: CGFloat = 8
 
-    static func applyAppearance() {
-        NSApp.appearance = NSAppearance(named: .aqua)
+    /// 取「动态系统色」在当前 appearance 下的 CGColor。
+    /// `NSColor.cgColor` 是按取值瞬间的 `NSAppearance.current` 解析的，而 layer
+    /// 背景不会随后续 appearance 变化自动更新——不在正确的上下文里取值，就会
+    /// 拿到旧主题的颜色（切到暗色后分隔线仍是亮色那种）。
+    static func resolved(_ color: NSColor) -> CGColor {
+        guard let app = NSApp else { return color.cgColor }
+        var cg: CGColor?
+        app.effectiveAppearance.performAsCurrentDrawingAppearance {
+            cg = color.cgColor
+        }
+        return cg ?? color.cgColor
+    }
+}
+
+/// 自身 appearance 变化时回调（系统亮/暗切换、全局 appearance 切换都会触发），
+/// 供自绘 layer 颜色的视图重新取色。
+final class AppearanceAwareView: NSView {
+    var onAppearanceChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
     }
 }
 
@@ -22,7 +139,7 @@ enum AppInfo {
     static let name = "截图工具"
     static let bundleID = "com.mimo.screenshottool"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "2.1.0"
+    static let version = "2.2.0"
 }
 
 /// Borderless color swatch: flat rounded fill in the current brush color, no
@@ -71,7 +188,7 @@ final class CapturePrimaryButton: NSButton {
         isBordered = false
         wantsLayer = true
         layer?.cornerRadius = 6
-        layer?.backgroundColor = Theme.accent.cgColor
+        layer?.backgroundColor = Theme.resolved(Theme.accent)
 
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.contentTintColor = .white
@@ -115,8 +232,8 @@ final class CapturePrimaryButton: NSButton {
     }
 
     override func mouseDown(with event: NSEvent) {
-        layer?.backgroundColor = Theme.accentPressed.cgColor
+        layer?.backgroundColor = Theme.resolved(Theme.accentPressed)
         super.mouseDown(with: event)
-        layer?.backgroundColor = Theme.accent.cgColor
+        layer?.backgroundColor = Theme.resolved(Theme.accent)
     }
 }

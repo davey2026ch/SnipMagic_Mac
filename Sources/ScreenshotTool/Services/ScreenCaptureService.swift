@@ -8,7 +8,10 @@ enum CaptureError: Error {
     case permissionDenied
 }
 
-/// Captures the full screen (with cursor) at native pixel resolution.
+/// Captures the full screen at native pixel resolution.
+/// The pointer (arrow / click gesture ring) is never baked into the pixels —
+/// the live cursor drawn by the system stays visible on top of our overlay,
+/// so users still see where the mouse is without it ending up in the shot.
 final class ScreenCaptureService {
     static let shared = ScreenCaptureService()
 
@@ -72,8 +75,9 @@ final class ScreenCaptureService {
         return try await capture(screen: screen)
     }
 
+    /// Region capture: pointer excluded (see class doc).
     func capture(screen: NSScreen) async throws -> CGImage {
-        try await capture(screen: screen, excludingWindowNumbers: [], showsCursor: true)
+        try await capture(screen: screen, excludingWindowNumbers: [], showsCursor: false)
     }
 
     /// Capture with the option to exclude our own windows (long-screenshot UI)

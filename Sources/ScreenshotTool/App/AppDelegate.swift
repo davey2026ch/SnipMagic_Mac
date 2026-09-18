@@ -12,8 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let defaultsKeyLogin = "launchAtLogin"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Theme.applyAppearance()
         MinerUOCRService.ensureConfigFile() // ~/.截图工具 不存在则自动创建
+        // 主题：配置里没有 theme 键（老版本升级上来的文件）时按「跟随系统」处理。
+        // 必须在建窗之前应用，否则首帧会用旧配色。
+        let persisted = MinerUOCRService.loadConfig()
+        Theme.apply(mode: persisted.theme)
         setupMenu()
 
         editorWindow = EditorWindowController()
@@ -37,7 +40,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotkeyService.shared.registerDefault()
         // 配置文件里保存过快捷键则覆盖默认值（设置界面保存时写入）
-        let persisted = MinerUOCRService.loadConfig()
         if let hk = persisted.captureHotkey {
             HotkeyService.shared.register(keyCode: hk.keyCode, modifiers: hk.modifiers)
         }
@@ -213,6 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await Task.sleep(nanoseconds: 120_000_000)
                 let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main!
+                // 区域截图同样不含鼠标箭头：overlay 用这张冻结帧当背景，光标不入画，
+                // 系统绘制的真实光标仍叠在 overlay 之上，用户照样看得见鼠标位置。
                 let image = try await ScreenCaptureService.shared.capture(screen: screen)
 
                 let overlay = CaptureOverlayController(screen: screen, image: image)

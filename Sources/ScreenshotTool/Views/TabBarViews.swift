@@ -78,14 +78,14 @@ final class TabChipView: NSView {
         tabButton.tag = index
         tabButton.isBordered = false
         tabButton.wantsLayer = true
-        tabButton.layer?.backgroundColor = (active
+        tabButton.layer?.backgroundColor = Theme.resolved(active
             ? Theme.accent
-            : (comparing ? Theme.accent.withAlphaComponent(0.82) : NSColor.controlBackgroundColor)).cgColor
+            : (comparing ? Theme.accent.withAlphaComponent(0.82) : NSColor.controlBackgroundColor))
         // Top-corners-only rounding → adjacent chips form a tab strip,
         // visually "rooted" in the strip's bottom hairline.
         tabButton.layer?.cornerRadius = 6
         tabButton.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        tabButton.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        tabButton.layer?.borderColor = Theme.resolved(NSColor.separatorColor.withAlphaComponent(0.5))
         tabButton.layer?.borderWidth = 0.5
 
         let label = PassThroughLabel(labelWithString: title)

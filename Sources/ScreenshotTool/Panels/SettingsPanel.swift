@@ -10,7 +10,8 @@ final class SettingsPanel: NSViewController {
         _ mosaic: CGFloat,
         _ thickness: CGFloat,
         _ minerUToken: String,
-        _ minerUTimeout: TimeInterval
+        _ minerUTimeout: TimeInterval,
+        _ theme: ThemeMode
     ) -> Void
 
     private let hotkeyButton = NSButton(title: "", target: nil, action: nil)
@@ -18,6 +19,7 @@ final class SettingsPanel: NSViewController {
     private let mosaicField = NSTextField()
     private let thicknessField = NSTextField()
     private let timeoutField = NSTextField()
+    private let themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     /// token 输入：密码框（默认）与明文框叠放，用小眼睛按钮切换。
     private let tokenSecureField = NSSecureTextField()
     private let tokenPlainField = NSTextField()
@@ -33,6 +35,7 @@ final class SettingsPanel: NSViewController {
 
     private let mosaicSeed: CGFloat
     private let thicknessSeed: CGFloat
+    private let themeSeed: ThemeMode
     private let previousHotkey: (keyCode: UInt32, modifiers: UInt32)
     private let previousLongHotkey: (keyCode: UInt32, modifiers: UInt32)
 
@@ -45,19 +48,22 @@ final class SettingsPanel: NSViewController {
         thickness: CGFloat,
         minerUToken: String,
         minerUTimeout: TimeInterval,
+        theme: ThemeMode,
         onApply: @escaping (
             _ hotkey: (UInt32, UInt32)?,
             _ longHotkey: (UInt32, UInt32)?,
             _ mosaic: CGFloat,
             _ thickness: CGFloat,
             _ minerUToken: String,
-            _ minerUTimeout: TimeInterval
+            _ minerUTimeout: TimeInterval,
+            _ theme: ThemeMode
         ) -> Void
     ) {
         self.currentHotkeyText = hotkeyDisplay
         self.currentLongHotkeyText = longHotkeyDisplay
         self.mosaicSeed = mosaic
         self.thicknessSeed = thickness
+        self.themeSeed = theme
         self.previousHotkey = HotkeyService.shared.currentHotkey
         self.previousLongHotkey = HotkeyService.shared.currentLongHotkey
         // 配置文件中的快捷键作为初始待生效值：
@@ -89,12 +95,16 @@ final class SettingsPanel: NSViewController {
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 428))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 466))
+        // 显式铺主题底色：sheet 的窗口背景在暗色下才有保证，不依赖系统默认。
+        root.wantsLayer = true
+        root.layer?.backgroundColor = Theme.windowBackground.cgColor
+        view = root
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        preferredContentSize = NSSize(width: 720, height: 428)
+        preferredContentSize = NSSize(width: 720, height: 466)
 
         configureHotkeyButton(hotkeyButton, action: #selector(hotkeyButtonClicked))
         configureHotkeyButton(longHotkeyButton, action: #selector(longHotkeyButtonClicked))
@@ -105,6 +115,7 @@ final class SettingsPanel: NSViewController {
         configureTokenField(tokenPlainField, value: tokenFieldSeed)
         tokenPlainField.isHidden = true
         configureEyeButton()
+        configureThemePopup()
 
         let title = NSTextField(labelWithString: "设置")
         title.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -119,6 +130,7 @@ final class SettingsPanel: NSViewController {
         let grid = NSGridView(views: [
             [makeFieldLabel("区域截图快捷键"), hotkeyButton, makeUnitLabel("")],
             [makeFieldLabel("长截图快捷键"), longHotkeyButton, makeUnitLabel("")],
+            [makeFieldLabel("主题"), themePopup, makeUnitLabel("默认跟随系统")],
             [makeFieldLabel("马赛克密度"), mosaicField, makeUnitLabel("2–64 像素/格")],
             [makeFieldLabel("线条粗细"), thicknessField, makeUnitLabel("1–40 像素")],
             [makeFieldLabel("超时时间"), timeoutField, makeUnitLabel("5–600 秒")],
@@ -135,7 +147,7 @@ final class SettingsPanel: NSViewController {
             grid.row(at: row).height = 28
         }
 
-        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；MinerU token 在 mineru.net 的「API 管理」页面创建。")
+        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。")
         tip.font = .systemFont(ofSize: 11)
         tip.textColor = .secondaryLabelColor
         tip.translatesAutoresizingMaskIntoConstraints = false
@@ -268,6 +280,33 @@ final class SettingsPanel: NSViewController {
         }
     }
 
+    /// 主题下拉框：暗色 / 亮色 / 跟随系统（默认）。
+    private func configureThemePopup() {
+        themePopup.removeAllItems()
+        // 菜单顺序按 displayOrder，选中项由 themeSeed 决定（缺省即「跟随系统」）。
+        for mode in ThemeMode.displayOrder {
+            themePopup.addItem(withTitle: mode.displayName)
+            themePopup.lastItem?.representedObject = mode.rawValue
+        }
+        let index = ThemeMode.displayOrder.firstIndex(of: themeSeed) ?? ThemeMode.displayOrder.count - 1
+        themePopup.selectItem(at: index)
+        themePopup.font = .systemFont(ofSize: 13)
+        themePopup.controlSize = .regular
+        themePopup.toolTip = "调整软件整体背景色：暗色 / 亮色 / 跟随系统（默认）"
+        themePopup.translatesAutoresizingMaskIntoConstraints = false
+        themePopup.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        themePopup.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    }
+
+    /// 当前选中的主题（取不到时回落到「跟随系统」）。
+    private var selectedTheme: ThemeMode {
+        guard let raw = themePopup.selectedItem?.representedObject as? String,
+              let mode = ThemeMode(rawValue: raw) else {
+            return .system
+        }
+        return mode
+    }
+
     private func makeFieldLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
         l.font = .systemFont(ofSize: 13)
@@ -382,7 +421,15 @@ final class SettingsPanel: NSViewController {
         let thickness = max(1, min(40, thicknessField.doubleValue))
         let timeout = max(5, min(600, timeoutField.doubleValue))
         let token = tokenFieldValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        onApply(pendingHotkey, pendingLongHotkey, CGFloat(mosaic), CGFloat(thickness), token, timeout)
+        onApply(
+            pendingHotkey,
+            pendingLongHotkey,
+            CGFloat(mosaic),
+            CGFloat(thickness),
+            token,
+            timeout,
+            selectedTheme
+        )
         dismiss(nil)
     }
 

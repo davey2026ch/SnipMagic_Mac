@@ -102,7 +102,8 @@ enum MinerUOCRError: LocalizedError {
 /// 1. 优先 Agent 轻量解析（免登录免 Token，IP 限频，仅输出 Markdown）；
 /// 2. 失败时降级到精准解析 API（vlm 模型，Token 取自 ~/.截图工具，
 ///    走 /api/v4/file-urls/batch 预签名上传，结果为 zip，取其中 full.md）。
-/// 配置文件 ~/.截图工具：token=sk-xxx（vlm 令牌）、agent_timeout=20（轻量等待秒数）。
+/// 配置文件 ~/.截图工具：token=sk-xxx（vlm 令牌）、agent_timeout=20（轻量等待秒数）、
+/// theme=system|light|dark（主题，缺省按跟随系统）。
 enum MinerUOCRService {
     private static let agentBaseURL = URL(string: "https://mineru.net/api/v1/agent")!
     private static let v4BaseURL = URL(string: "https://mineru.net/api/v4")!
@@ -123,6 +124,8 @@ enum MinerUOCRService {
         var mosaic: CGFloat = 10
         /// 线条粗细（像素），默认 4。
         var thickness: CGFloat = 4
+        /// 主题模式。老配置文件没有 theme 键 → 默认跟随系统。
+        var theme: ThemeMode = .system
 
         /// 与代码内置默认值完全一致的配置。
         static let defaults = MinerUConfig()
@@ -176,6 +179,9 @@ enum MinerUOCRService {
                 if let v = Double(value) { config.mosaic = CGFloat(min(max(v, 2), 64)) }
             case "line_width", "thickness":
                 if let v = Double(value) { config.thickness = CGFloat(min(max(v, 1), 40)) }
+            case "theme", "主题":
+                // 缺省 / 值无法识别 → 保持默认（跟随系统）
+                if let m = ThemeMode.parse(value) { config.theme = m }
             default:
                 break
             }
@@ -191,7 +197,8 @@ enum MinerUOCRService {
         mosaic: CGFloat,
         thickness: CGFloat,
         token: String?,
-        agentTimeout: TimeInterval
+        agentTimeout: TimeInterval,
+        theme: ThemeMode
     ) {
         var config = MinerUConfig()
         config.captureHotkey = captureHotkey
@@ -200,6 +207,7 @@ enum MinerUOCRService {
         config.thickness = min(max(thickness, 1), 40)
         config.token = token
         config.agentTimeout = min(max(agentTimeout, 5), 600)
+        config.theme = theme
         try? configTemplate(config: config)
             .write(toFile: configPath(), atomically: true, encoding: .utf8)
     }
@@ -224,6 +232,8 @@ enum MinerUOCRService {
         token=\(config.token ?? "")
         # 超时时间：轻量级接口的等待秒数，超时后自动降级到精准解析（vlm）；有效范围 5~600
         agent_timeout=\(Int(config.agentTimeout))
+        # 主题：dark=暗色 / light=亮色 / system=跟随系统（默认）；本项缺失或无法识别时按「跟随系统」处理
+        theme=\(config.theme.configValue)
 
         """
     }

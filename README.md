@@ -4,6 +4,8 @@
 
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v2.2.0-blue)
 
+[English](README.en.md) | 简体中文
+
 ## 核心特点
 
 **1、支持区域截图、长截图，一张图片占据一个 sheet 页签。**
@@ -117,6 +119,22 @@
 - **主题**：设置中可选「暗色 / 亮色 / 跟随系统」（默认跟随系统），调整整体背景色；保存在配置文件 `theme=` 键，老版本配置无此项时按「跟随系统」处理
 - **可调参数**：马赛克密度、线条粗细、提取内容超时时间（轻量解析等待秒数，默认 10s，超时自动降级精准模式）、MinerU Token（精准模式所需）
 - 设置页显示当前版本号与打包时间
+
+### 配置文件 `~/.截图工具`
+
+首次启动自动创建，设置界面保存时全量写回：
+
+| 键 | 说明 | 缺省 |
+| --- | --- | --- |
+| `capture_hotkey` | 区域截图快捷键（如 `Command+Shift+R`） | `Command+Shift+R` |
+| `long_hotkey` | 长截图快捷键 | `Command+Shift+E` |
+| `theme` | 主题：`dark` / `light` / `system` | `system`（跟随系统） |
+| `mosaic` | 马赛克密度（2–64 像素/格） | `10` |
+| `line_width` | 线条粗细（1–40 像素） | `4` |
+| `agent_timeout` | 轻量解析等待秒数（5–600），超时降级精准解析 | `10` |
+| `token` | MinerU Token（精准解析 vlm 用） | 空 |
+
+> **老配置兼容**：从旧版本升级上来的配置文件里没有 `theme` 项，此时一律按「跟随系统」处理 —— 打开设置会显示「跟随系统」，点确定保存后才会把 `theme=` 写进文件。
 
 ## 安装
 

@@ -1,124 +1,131 @@
 # Screenshot Tool for macOS
 
-A powerful, native screenshot application designed specifically for macOS. It provides comprehensive screenshot functionality with advanced image editing capabilities, including region/window/display capture, long screenshot stitching, and integrated OCR functionality.
+A native macOS screenshot tool written in Swift: region capture, scrolling long capture,
+multi-tab annotation editing, side-by-side comparison, zooming, a screen colour picker and
+OCR text/table extraction — ready to use out of the box.
 
-## Key Features
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v2.2.0-blue)
 
-### Capture Modes
-- **Region Capture**: Draw a custom selection area on any screen.
-- **Window Capture**: Select and capture individual application windows.
-- **Full Screen Capture**: Quickly capture the entire contents of any display.
-- **Long Capture (Scrolling)**: Automatically scroll and stitch together content that extends beyond the visible screen area (e.g., web pages or long documents).
+English | [简体中文](README.md)
 
-### Integrated Editor
-Annotate captured images directly within the app with a comprehensive set of tools:
-- **Shapes**: Rectangles, ovals, arrows, and freehand paths.
-- **Text**: Add text annotations with customizable fonts, sizes, and styles.
-- **Mosaic/Blur**: Protect sensitive information by obscuring selected areas.
-- **Numbering**: Quickly add sequential numbered badges.
-- **Color Picker**: Choose custom colors for all annotation elements.
+## Highlights
 
-The editor supports non-destructive editing, allowing you to undo/redo changes and modify or remove annotations at any time.
+- **Capture**: region capture and scrolling long capture, one tab per image.
+- **Never captures the pointer**: the mouse arrow and click gesture ring are excluded from
+  both region and long captures — the live cursor still shows while you drag to select, it
+  just never ends up in the saved image.
+- **Multi-tab editor**: every capture becomes a tab (P1, P2, …) you can switch, reorder by
+  dragging, and close from the right-click menu.
+- **Compare two images**: drag a tab onto the right half (or use the tab context menu) to
+  show two images side by side, with synchronised scrolling on by default.
+- **Theme**: dark / light / follow system, chosen in Settings.
+- **OCR / content extraction**: text + tables (and images on some pages), exported to
+  Markdown, Word or Excel.
 
-### Optical Character Recognition (OCR)
-- Extract text from your screenshots using the built-in OCR feature.
-- Supports plain text extraction and intelligent table recognition.
-- Copy results directly to your clipboard for easy use in other applications.
+## Capture modes
 
-### Customization & Automation
-- **Hotkey Support**: Define global keyboard shortcuts for instant region capture, window capture, and long capture.
-- **Startup Options**: Optionally launch the app at system login for quick access.
-- **System Tray Integration**: Manage screenshots via a convenient menu bar icon.
+| Mode | Default shortcut | Notes |
+| --- | --- | --- |
+| Region capture | `⌘ ⇧ R` | Drag to select any area; our own windows are excluded, and no mouse pointer is included |
+| Long capture | `⌘ ⇧ E` | Select an area, then scroll the page — frames are stitched into one tall image, also without the pointer |
 
-## System Requirements
+**Stitching algorithm**: row signatures (16 segments) + full dy-offset search + candidate
+pixel verification + seam refinement (SAD correlation), with sticky top/bottom detection and
+document-coordinate de-duplication, so overlapping scroll regions join without ghosting.
 
-- **macOS**: 12.0 (Monterey) or later
-- **Hardware**: Any Mac capable of running the above macOS version
+## Editor
+
+- **Tools**: select, rectangle, rounded rectangle, ellipse, arrow, line, freehand pen,
+  text, mosaic, numbered badges, solid shapes for covering content.
+- **Non-destructive**: annotations can be selected, moved, resized and restyled; undo/redo
+  with `⌘Z` / `⌘⇧Z`.
+- **Text**: font size, bold, colour and optional opaque background.
+- **Mosaic density** adjustable in Settings (2–64 px per block).
+- **Zoom**: `⌘ + scroll wheel` (10 %–800 %, snaps near 100 %), or trackpad pinch. Note the
+  direction is **scroll up to zoom out, scroll down to zoom in**.
+- **Colour**: click the swatch in the sidebar to open a colour wheel / RGB / HEX panel, plus
+  a full-screen eyedropper that samples a colour from anywhere on screen.
+- **`⌘C`** copies intelligently: rubber-band selection → selected pasted image → selected
+  shape's bounding box → whole image.
+
+## Content extraction (OCR)
+
+- Click **Extract content** in the toolbar: the current tab (or just the selection) is sent
+  for recognition and the result comes back as Markdown, copied to the clipboard.
+- Two channels: a free lightweight parser first, falling back to the precise (vlm) API when
+  it times out or fails. The precise channel needs a MinerU token, set in Settings.
+- Export the result to Markdown (with an `images/` folder), Word (`.docx`) or Excel
+  (`.xlsx`) — images are embedded inline in Word and anchored to their row in Excel.
+
+> On macOS, WPS is sandboxed to the Desktop / Documents / Downloads folders. If you export a
+> Markdown folder somewhere else, WPS will not load the images inside it — open it with
+> Typora / VS Code, or move the folder to one of those locations.
+
+## Settings
+
+- Region / long capture hotkeys (record a new combination; at least one modifier key).
+- **Theme**: dark / light / follow system (default: follow system).
+- Mosaic density, line width, extraction timeout, MinerU token.
+- The settings sheet shows the current version and build time.
+
+## Configuration file
+
+Everything is stored in `~/.截图工具` (created automatically on first launch):
+
+```
+capture_hotkey=Command+Shift+R
+long_hotkey=Command+Shift+E
+mosaic=10
+line_width=4
+token=sk-...
+agent_timeout=10
+theme=system        # dark / light / system (default when missing)
+```
+
+Older config files that do not contain `theme` are treated as **follow system**; saving the
+settings sheet writes the key back.
 
 ## Installation
 
-### Using Homebrew (Recommended)
+1. Download the latest `.dmg` from [Gitee Releases](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases):
+   - **Apple Silicon (M series)**: `截图工具-v2.2.0.dmg` (arm64)
+   - **Intel Mac**: `截图工具-v2.2.0-x86_64.dmg` (x86_64)
+2. Open the dmg and drag **截图工具** into `Applications`.
+3. **First launch**: the build is ad-hoc signed, so right-click the app in `Applications` →
+   **Open** → **Open** again to get past Gatekeeper.
+4. Grant **Screen Recording** permission when asked (restart the app afterwards for the
+   permission to take effect).
+
+**Requirements**: macOS 14.0 (Sonoma) or later.
+
+## Building from source
+
 ```bash
-brew install --cask screenshot-tool-mac
+git clone https://gitee.com/mrpu2020/screenshot-tool-Mac.git
+cd screenshot-tool-Mac
+
+# Run from source
+swift build --disable-sandbox
+swift run ScreenshotTool
+
+# Package (arm64 + x86_64 dmgs; signs and verifies the architectures)
+./build_app.sh
+
+# Single architecture:
+# ./build_app.sh --native       # arm64 dmg only
+# ./build_app.sh --x86_64       # Intel dmg only
+# ./build_app.sh --universal    # one universal dmg
+# ./build_app.sh --app-only     # .app only, no dmg
 ```
 
-### Manual Installation
-1. Download the latest release from the [GitHub Releases](https://github.com/mrpu2020/screenshot-tool-Mac/releases) page.
-2. Open the downloaded `.dmg` file.
-3. Drag the application into your `Applications` folder.
-4. (First Launch) Right-click the app in `Applications` and select **Open** to bypass macOS gatekeeper warnings.
+`--disable-sandbox` is required for SwiftPM in restricted environments.
 
-### Post-Installation Permissions
-On first launch, the app requires **Screen Recording** permission to capture screen content. A guide will walk you through granting this permission if it's not already enabled.
-
-## Usage Guide
-
-### Starting a Capture
-1. Click the menu bar icon or use your configured hotkey.
-2. Select the capture mode:
-   - `Capture Region` (default)
-   - `Capture Window`
-   - `Capture Screen`
-   - `Long Capture`
-3. For region/window modes, follow the on-screen overlay instructions to make your selection.
-4. Your capture will open in the editor automatically.
-
-### Using the Editor
-- **Select Tool**: Click on an existing annotation to select it.
-- **Move/Resize**: Drag to move, or use the corner handles to resize.
-- **Style Panel**: Change colors, line width, and other properties in the toolbar.
-- **Undo/Redo**: Use `Cmd+Z` and `Cmd+Shift+Z` (or the toolbar buttons).
-
-### Long Capture (Scrolling)
-1. Select `Long Capture` from the menu or hotkey.
-2. Select a window or region to capture. A control panel will appear.
-3. Click **Start** (Enter) to begin scrolling.
-4. The tool will automatically scroll and stitch the content.
-5. Press **Finish** (Enter) when done, or **Cancel** (Escape) to abort.
-
-### OCR Extraction
-1. Open a screenshot in the editor.
-2. Click `Extract Text` in the toolbar (or use the shortcut).
-3. A progress panel will appear while the text is being recognized.
-4. Once complete, the extracted text can be copied or closed.
-
-## Configuration
-
-### Hotkeys
-Default hotkeys are provided, but you can customize them in **Settings**:
-- **Region Capture**: `Cmd + Shift + 2`
-- **Window Capture**: `Cmd + Shift + 3`
-- **Long Capture**: `Cmd + Shift + 4`
-
-### Editor Defaults
-- **Mosaic Strength**: 10 (pixels per block)
-- **Line Thickness**: 3 (points)
-
-## Building from Source
-
-If you wish to contribute or build the app manually:
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/mrpu2020/screenshot-tool-Mac.git
-   ```
-2. **Navigate to the directory**:
-   ```bash
-   cd screenshot-tool-Mac
-   ```
-3. **Build the project**:
-   ```bash
-   swift build
-   ```
-4. **Run the application**:
-   ```bash
-   swift run
-   ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+**Architecture conventions**: `dist/截图工具.app` always contains the **arm64** build only
+(so it can be double-clicked locally); only the dmgs distinguish architectures
+(`截图工具-vX.dmg` = arm64, `截图工具-vX-x86_64.dmg` = Intel). Non-arm64 dmgs are assembled
+in a temporary directory under `/tmp`, so `dist/` stays clean. Cross-compiling the Intel
+build only needs `swift build --triple x86_64-apple-macosx14.0.0` — no Intel machine needed.
 
 ## License
 
-This project is licensed under the MIT License.
+MIT. See [LICENSE](LICENSE).

@@ -100,9 +100,9 @@ enum MinerUOCRError: LocalizedError {
 
 /// MinerU 内容提取：
 /// 1. 优先 Agent 轻量解析（免登录免 Token，IP 限频，仅输出 Markdown）；
-/// 2. 失败时降级到精准解析 API（vlm 模型，Token 取自 ~/.截图工具，
+/// 2. 失败时降级到精准解析 API（vlm 模型，Token 取自 ~/.SnipMagic.ini，
 ///    走 /api/v4/file-urls/batch 预签名上传，结果为 zip，取其中 full.md）。
-/// 配置文件 ~/.截图工具：token=sk-xxx（vlm 令牌）、agent_timeout=20（轻量等待秒数）、
+/// 配置文件 ~/.SnipMagic.ini：token=sk-xxx（vlm 令牌）、agent_timeout=20（轻量等待秒数）、
 /// theme=system|light|dark（主题，缺省按跟随系统）。
 enum MinerUOCRService {
     private static let agentBaseURL = URL(string: "https://mineru.net/api/v1/agent")!
@@ -110,7 +110,7 @@ enum MinerUOCRService {
     private static let pollInterval: TimeInterval = 2.0
     private static let vlmTimeout: TimeInterval = 300.0
 
-    // MARK: - Config（~/.截图工具）
+    // MARK: - Config（~/.SnipMagic.ini）
 
     struct MinerUConfig {
         var token: String?
@@ -136,17 +136,42 @@ enum MinerUOCRService {
         static let defaults = MinerUConfig()
     }
 
-    static func configPath() -> String { NSHomeDirectory() + "/.截图工具" }
+    /// 配置文件路径。产品改名（截图工具 → 截图大师 SnipMagic）后统一为这个文件名。
+    static func configPath() -> String { NSHomeDirectory() + "/.SnipMagic.ini" }
 
-    /// 启动时调用：~/.截图工具 存在则跳过，不存在则自动创建默认配置。
+    /// 改名前的旧配置文件 `~/.截图工具`，只用于一次性迁移。
+    static func legacyConfigPath() -> String { NSHomeDirectory() + "/.截图工具" }
+
+    /// 启动时调用：
+    /// - `~/.SnipMagic.ini` 已存在 → 什么都不做；
+    /// - 不存在但有旧的 `~/.截图工具` → 内容整体搬到新文件（用户已填的 token / 火山 Key 全部保留），
+    ///   旧文件改名为 `~/.截图工具.bak` 留档（同名 .bak 已存在时不覆盖，旧文件原地保留）；
+    /// - 两者都没有 → 生成默认配置模板。
     static func ensureConfigFile() {
         let path = configPath()
-        guard !FileManager.default.fileExists(atPath: path) else { return }
+        let fileManager = FileManager.default
+        guard !fileManager.fileExists(atPath: path) else { return }
+
+        let legacy = legacyConfigPath()
+        if fileManager.fileExists(atPath: legacy),
+           let old = try? String(contentsOfFile: legacy, encoding: .utf8) {
+            // 内容原样搬过来（数值与密钥一个都不动），只把首行抬头里的旧产品名换掉，
+            // 否则新文件里会留着「截图工具配置文件」这种过期名字。
+            let migrated = old.replacingOccurrences(of: "# 截图工具配置文件",
+                                                   with: "# 截图大师 SnipMagic 配置文件")
+            try? migrated.write(toFile: path, atomically: true, encoding: .utf8)
+            let backup = legacy + ".bak"
+            if !fileManager.fileExists(atPath: backup) {
+                try? fileManager.moveItem(atPath: legacy, toPath: backup)
+            }
+            return
+        }
+
         try? configTemplate(config: .defaults)
             .write(toFile: path, atomically: true, encoding: .utf8)
     }
 
-    /// 读取 ~/.截图工具（反向带出：设置界面据此回填）。
+    /// 读取 ~/.SnipMagic.ini（反向带出：设置界面据此回填）。
     static func loadConfig() -> MinerUConfig {
         var config = MinerUConfig()
         guard let text = try? String(contentsOfFile: configPath(), encoding: .utf8) else {
@@ -198,7 +223,7 @@ enum MinerUOCRService {
         return config
     }
 
-    /// 设置界面保存（正向生成：一一对应写入 ~/.截图工具）。
+    /// 设置界面保存（正向生成：一一对应写入 ~/.SnipMagic.ini）。
     /// 快捷键始终写入当前生效值（未重新录制时即原值）。
     static func saveConfig(
         captureHotkey: (keyCode: UInt32, modifiers: UInt32),
@@ -233,7 +258,7 @@ enum MinerUOCRService {
             .map { HotkeyService.format(keyCode: $0.keyCode, modifiers: $0.modifiers) }
             ?? "Command+Shift+E"
         return """
-        # 截图工具配置文件
+        # 截图大师 SnipMagic 配置文件
         # 快捷键格式：修饰键+键名，如 Command+Shift+R（修饰键可用 Command/Shift/Option/Control）
         capture_hotkey=\(capture)
         long_hotkey=\(long)

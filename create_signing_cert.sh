@@ -2,7 +2,7 @@
 # 创建代码签名用的固定自签证书（本机执行一次即可，之后一直复用）。
 #
 # 为什么需要它：
-#   截图工具支持自动更新（下载 dmg → 替换 /Applications 里的 .app → 重启）。
+#   截图大师SnipMagic支持自动更新（下载 dmg → 替换 /Applications 里的 .app → 重启）。
 #   macOS 的屏幕录制等 TCC 授权是按「代码签名要求（designated requirement）」记的。
 #   ad-hoc 签名（codesign --sign -）的 DR 绑在 cdhash 上，每次重新构建都会变，
 #   于是每更新一次就要重新授权一次。换成固定证书后

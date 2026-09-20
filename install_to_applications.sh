@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-APP_SRC="$ROOT/dist/截图工具.app"
-APP_DST="/Applications/截图工具.app"
-BUNDLE_ID="com.mimo.screenshottool"
+APP_SRC="$ROOT/dist/截图大师SnipMagic.app"
+APP_DST="/Applications/截图大师SnipMagic.app"
+BUNDLE_ID="com.mimo.snipmagic"
 RESET_TCC=0
 
 if [[ "${1:-}" == "--reset-permission" ]]; then
@@ -18,7 +18,7 @@ fi
 
 echo "==> 退出正在运行的实例"
 pkill -x ScreenshotTool 2>/dev/null || true
-osascript -e 'tell application "截图工具" to quit' 2>/dev/null || true
+osascript -e 'tell application "截图大师 SnipMagic" to quit' 2>/dev/null || true
 sleep 0.5
 
 echo "==> 安装到 /Applications"
@@ -37,4 +37,4 @@ open "$APP_DST"
 
 echo ""
 echo "完成：$APP_DST"
-echo "若无法截图，请到 系统设置 → 隐私与安全性 → 屏幕录制 打开「截图工具」。"
+echo "若无法截图，请到 系统设置 → 隐私与安全性 → 屏幕录制 打开「截图大师 SnipMagic」。"

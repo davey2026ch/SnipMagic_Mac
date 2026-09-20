@@ -88,7 +88,7 @@ final class EditorViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // 启动时读取 ~/.截图工具 中的马赛克密度、线条粗细、擦除刷粗细
+        // 启动时读取 ~/.SnipMagic.ini 中的马赛克密度、线条粗细、擦除刷粗细
         let persisted = MinerUOCRService.loadConfig()
         style.mosaicCell = persisted.mosaic
         style.lineWidth = persisted.thickness
@@ -1379,7 +1379,7 @@ final class EditorViewController: NSViewController {
 
     @objc private func showSettingsPanel() {
         guard view.window != nil else { return }
-        // 反向带出：每次打开都从 ~/.截图工具 现读，保证界面与文件一一对应
+        // 反向带出：每次打开都从 ~/.SnipMagic.ini 现读，保证界面与文件一一对应
         // （运行中手动改文件后，无需重启即可在此看到并按「确定」生效）
         let config = MinerUOCRService.loadConfig()
         let captureText = config.captureHotkey
@@ -1425,7 +1425,7 @@ final class EditorViewController: NSViewController {
             }
             // 主题：立刻应用（整窗跟随 appearance + 自绘 layer 重新取色）
             Theme.apply(mode: theme)
-            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题/火山 key）写入 ~/.截图工具
+            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题/火山 key）写入 ~/.SnipMagic.ini
             let savedCapture = HotkeyService.shared.currentHotkey
             let savedLong = HotkeyService.shared.currentLongHotkey
             MinerUOCRService.saveConfig(

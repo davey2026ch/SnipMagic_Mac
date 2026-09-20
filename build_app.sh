@@ -1,27 +1,27 @@
 #!/bin/zsh
-# 截图工具打包脚本（多架构 + dmg 一体化）
+# 截图大师 SnipMagic 打包脚本（多架构 + dmg 一体化）
 #
 # 架构约定（重要）：
-#   dist/截图工具.app  —— 只放 **arm64（M 芯片）** 版本，永远只有一个架构，方便本机双击即用；
+#   dist/截图大师SnipMagic.app  —— 只放 **arm64（M 芯片）** 版本，永远只有一个架构，方便本机双击即用；
 #   dist/*.dmg         —— 按需区分架构：默认同时出 arm64 与 x86_64 两份（Intel / M 各自下载）。
-#   非 arm64 的 dmg 在 /tmp 的临时目录里组装 .app，不污染 dist/截图工具.app。
+#   非 arm64 的 dmg 在 /tmp 的临时目录里组装 .app，不污染 dist/截图大师SnipMagic.app。
 #
 # 用法：
 #   ./build_app.sh                # 默认：同时打 arm64 和 x86_64 两份 dmg（dist 里的 .app 仍是 arm64）
 #   ./build_app.sh --native       # 只打 arm64 dmg（Apple Silicon）
 #   ./build_app.sh --x86_64       # 只打 x86_64 dmg（Intel Mac）
 #   ./build_app.sh --universal    # 打 arm64+x86_64 通用二进制 dmg（一包通吃）
-#   ./build_app.sh --app-only     # 不打 dmg，只产出 dist/截图工具.app（arm64）
+#   ./build_app.sh --app-only     # 不打 dmg，只产出 dist/截图大师SnipMagic.app（arm64）
 #   ./build_app.sh --skip-build   # 跳过 swift build，直接用已编译好的二进制打 dmg（调试用）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="截图工具"
+APP_NAME="截图大师SnipMagic"
 BIN_NAME="ScreenshotTool"
 DIST="$ROOT/dist"
 MIN_MACOS="14.0.0"  # 由 Package.swift platforms: [.macOS(.v14)] 决定，必须对齐
 # 非 arm64 架构组装 .app 的临时目录（用完即删）
-TMP_APP_ROOT="/tmp/截图工具-build-$$"
+TMP_APP_ROOT="/tmp/SnipMagic-build-$$"
 
 cleanup() { rm -rf "$TMP_APP_ROOT"; }
 trap cleanup EXIT
@@ -95,7 +95,7 @@ assemble_app() {
 make_dmg() {
     local app="$1"
     local dmg="$2"
-    local staging="/tmp/截图工具-dmg-staging-$$"
+    local staging="/tmp/SnipMagic-dmg-staging-$$"
     rm -rf "$staging" && mkdir -p "$staging"
     cp -R "$app" "$staging/"
     ln -s /Applications "$staging/Applications"
@@ -105,14 +105,14 @@ make_dmg() {
     rm -rf "$staging"
     echo "  -> dmg: $dmg ($(ls -la "$dmg" | awk '{print $5}') bytes)"
     # 验证 dmg 内二进制架构
-    local mnt="/tmp/截图工具-verify-$$"
+    local mnt="/tmp/SnipMagic-verify-$$"
     hdiutil attach -nobrowse -readonly "$dmg" -mountpoint "$mnt" >/dev/null 2>&1
     lipo -info "$mnt/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>&1 || true
     hdiutil detach "$mnt" >/dev/null 2>&1 || true
 }
 
 # app_path_for_suffix <dmg-suffix>
-# 约定：只有 arm64（无后缀）那份组装进 dist/截图工具.app；
+# 约定：只有 arm64（无后缀）那份组装进 dist/截图大师SnipMagic.app；
 # 其余架构（-x86_64 / -universal）只在 /tmp 临时目录里组装，打完 dmg 就丢。
 app_path_for_suffix() {
     if [[ -z "$1" ]]; then
@@ -140,7 +140,7 @@ build_one_arch_release() {
     make_dmg "$app" "$dmg"
     # 临时目录里的 .app 用完即弃，避免误当成可分发产物
     [[ "$app" == "$DIST/$APP_NAME.app" ]] || rm -rf "$app"
-    echo "  -> dist/截图工具.app 架构：$(lipo -info "$DIST/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>/dev/null | sed 's/.*: //' || echo '（尚未生成）')"
+    echo "  -> dist/截图大师SnipMagic.app 架构：$(lipo -info "$DIST/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>/dev/null | sed 's/.*: //' || echo '（尚未生成）')"
 }
 
 # ============================ 主流程 ============================
@@ -151,12 +151,12 @@ mkdir -p "$DIST"
 case "$MODE" in
     all|"")
         echo "==> 默认模式：同时打 arm64 + x86_64 两份 dmg"
-        echo "==> [1/2] 构建 arm64 版（Apple Silicon）→ 同时产出 dist/截图工具.app"
+        echo "==> [1/2] 构建 arm64 版（Apple Silicon）→ 同时产出 dist/截图大师SnipMagic.app"
         build_one_arch_release "" "$ROOT/.build" "arm64" ""
         echo "==> [2/2] 构建 x86_64 版（Intel Mac）→ 只在临时目录组装，不影响 dist 里的 .app"
         build_one_arch_release "x86_64-apple-macosx$MIN_MACOS" "$ROOT/.build-x86_64" "x86_64" "-x86_64"
         echo "==> 全部完成："
-        echo "  dist/截图工具.app : $(lipo -archs "$DIST/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>/dev/null || echo '（未生成）')"
+        echo "  dist/截图大师SnipMagic.app : $(lipo -archs "$DIST/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>/dev/null || echo '（未生成）')"
         ls -la "$DIST"/*.dmg 2>/dev/null
         ;;
     --native)
@@ -177,13 +177,13 @@ case "$MODE" in
             "$ROOT/.build-arm64/release/$BIN_NAME" \
             "$ROOT/.build-x86_64/release/$BIN_NAME" \
             -output "$ROOT/.build/$BIN_NAME.merged"
-        # 通用包也只在临时目录组装：dist/截图工具.app 始终只放 arm64。
+        # 通用包也只在临时目录组装：dist/截图大师SnipMagic.app 始终只放 arm64。
         mkdir -p "$TMP_APP_ROOT"
         local_app="$TMP_APP_ROOT/$APP_NAME.app"
         assemble_app "$ROOT/.build/$BIN_NAME.merged" "$local_app"
         make_dmg "$local_app" "$DIST/${APP_NAME}-v${VERSION}-universal.dmg"
         rm -rf "$local_app"
-        echo "  -> dist/截图工具.app 架构：$(lipo -info "$DIST/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>/dev/null | sed 's/.*: //' || echo '（尚未生成）')"
+        echo "  -> dist/截图大师SnipMagic.app 架构：$(lipo -info "$DIST/$APP_NAME.app/Contents/MacOS/$BIN_NAME" 2>/dev/null | sed 's/.*: //' || echo '（尚未生成）')"
         ls -la "$DIST"/*.dmg 2>/dev/null | tail -5
         ;;
     --app-only)
@@ -201,7 +201,7 @@ case "$MODE" in
         echo "  --universal    打通用二进制 dmg（一包通吃）" >&2
         echo "  --app-only     只打 .app，不打 dmg" >&2
         echo "" >&2
-        echo "  约定：dist/截图工具.app 永远是 arm64（M 芯片）；只有 dmg 才区分 Intel / M。" >&2
+        echo "  约定：dist/截图大师SnipMagic.app 永远是 arm64（M 芯片）；只有 dmg 才区分 Intel / M。" >&2
         exit 64
         ;;
 esac

@@ -1,8 +1,8 @@
-# 截图工具（macOS 原生）
+# 截图大师 SnipMagic（macOS 原生）
 
-一款用 Swift 编写的 macOS 原生截图工具：区域截图、滚动长截图、多页签标注编辑、左右对比、缩放、取色、OCR 文字/表格识别，开箱即用。
+**截图大师 SnipMagic** 是一款用 Swift 编写的 macOS 原生截图工具：区域截图、滚动长截图、多页签标注编辑、左右对比、缩放、取色、OCR 文字/表格识别，开箱即用。
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v3.0.1-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v3.1.0-blue)
 
 [English](README.en.md) | 简体中文
 
@@ -27,7 +27,7 @@
 - （2）部分图文混排的图片，可以解析出文字 + 图片（抠图）；
 - （3）提取完成后，自动写入剪贴板，方便直接粘贴；
 - （4）后台对接免费的 MinerU 接口，Token 申请地址：<https://mineru.net/apiManage/token>；
-- （5）配置文件路径：`~/.截图工具`（主题、快捷键、马赛克密度、线条粗细、刷子粗细、超时时间、Token、火山 API Key 都存在这里）。
+- （5）配置文件路径：`~/.SnipMagic.ini`（主题、快捷键、马赛克密度、线条粗细、刷子粗细、超时时间、Token、火山 API Key 都存在这里）。
 
 **6、支持常规编辑**：文字、画笔、箭头、直线、边框、序号、撤销、重做等。
 
@@ -138,15 +138,17 @@
 
 ### 自动更新（默认开启）
 
-启动约 3 秒后静默检查 [Gitee Release](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases) 是否有新版本；也可以点「设置」→「版本更新」→「检查更新」手动触发。
+启动约 3 秒后静默检查 [Gitee Release](https://gitee.com/mrpu2020/SnipMagic_Mac/releases) 是否有新版本；也可以点「设置」→「版本更新」→「检查更新」手动触发。
 
 - **只提示，不偷偷装**：发现新版本只弹窗，点「立即更新」才开始下载；点「稍后」本次不再打扰
-- **自动匹配芯片**：按本机真实硬件挑安装包（`截图工具-vX.Y.Z.dmg` = Apple 芯片，`截图工具-vX.Y.Z-x86_64.dmg` = Intel）
+- **自动匹配芯片**：按本机真实硬件挑安装包（`截图大师SnipMagic-vX.Y.Z.dmg` = Apple 芯片，`截图大师SnipMagic-vX.Y.Z-x86_64.dmg` = Intel）
 - **替换有兜底**：先把旧版改名为 `.update-backup` 再覆盖，失败自动回滚；目录不可写时会打开 dmg 让用户手动拖，最差情况也不会把应用弄丢
 - **不内置任何密钥**：读取 Release 走 Gitee 公开接口，无需令牌
-- 安装包缓存在 `~/Library/Caches/截图工具/updates/`
+- 安装包缓存在 `~/Library/Caches/截图大师SnipMagic/updates/`
 
 > 因为软件使用**固定自签证书**签名（详见「从源码构建」），签名要求只与证书指纹绑定，所以更新替换后「屏幕录制」等系统授权仍然有效，不需要重新授权。
+>
+> ⚠️ **例外：v3.0.x → v3.1.0 这一次改名升级**。改名同时把 Bundle ID 从 `com.mimo.screenshottool` 换成了 `com.mimo.snipmagic`，签名要求里的标识符变了，系统会把它当成一个新应用 —— 所以升级到 v3.1.0 后需要**重新授权一次**「屏幕录制」，之后再更新就不会再要了。旧版本（≤ v3.0.1）的 App 仍在 `/Applications` 里的话建议一并删掉。
 
 ### 其他
 
@@ -156,7 +158,7 @@
 - **可调参数**：马赛克密度、线条粗细、擦除刷粗细、提取内容超时时间（轻量解析等待秒数，默认 10s，超时自动降级精准模式）、MinerU Token（精准模式所需）、火山 API Key（魔法消除所需）
 - 设置页显示当前版本号与打包时间，并提供「检查更新」入口
 
-### 配置文件 `~/.截图工具`
+### 配置文件 `~/.SnipMagic.ini`
 
 首次启动自动创建，设置界面保存时全量写回：
 
@@ -172,16 +174,18 @@
 | `token` | MinerU Token（精准解析 vlm 用） | 空 |
 | `volc_key` | 火山引擎 AI MediaKit API Key（魔法消除用） | 空 |
 
+> **改名迁移（v3.0.1 → v3.1.0）**：新版本首次启动时，若发现旧的 `~/.截图工具` 而 `~/.SnipMagic.ini` 还不存在，会**自动把内容整体搬过来**（你填过的 MinerU Token、火山 API Key 等全部保留），旧文件改名为 `~/.截图工具.bak` 留档。迁移只做一次。
+>
 > **老配置兼容**：从旧版本升级上来的配置文件里没有 `theme` 项，此时一律按「跟随系统」处理 —— 打开设置会显示「跟随系统」，点确定保存后才会把 `theme=` 写进文件。
 
 ## 安装
 
 ### 下载安装（推荐）
 
-1. 前往 [Releases](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases) 下载最新 `.dmg`；
-   - **Apple Silicon（M 系列）**：下载 `截图工具-v3.0.1.dmg`（arm64）
-   - **Intel Mac**：下载 `截图工具-v3.0.1-x86_64.dmg`（x86_64）
-2. 打开 dmg，将「截图工具」拖入 `Applications` 文件夹；
+1. 前往 [Releases](https://gitee.com/mrpu2020/SnipMagic_Mac/releases) 下载最新 `.dmg`；
+   - **Apple Silicon（M 系列）**：下载 `截图大师SnipMagic-v3.1.0.dmg`（arm64）
+   - **Intel Mac**：下载 `截图大师SnipMagic-v3.1.0-x86_64.dmg`（x86_64）
+2. 打开 dmg，将「截图大师SnipMagic」拖入 `Applications` 文件夹；
 3. **首次启动**：因使用自签名证书，请在「应用程序」中**右键 → 打开**，再点「打开」以通过 Gatekeeper；
 4. 首次使用需授予**屏幕录制**权限（系统会自动引导，授权后重启应用生效）。
 
@@ -227,8 +231,8 @@
 ## 从源码构建
 
 ```bash
-git clone https://gitee.com/mrpu2020/screenshot-tool-Mac.git
-cd screenshot-tool-Mac
+git clone https://gitee.com/mrpu2020/SnipMagic_Mac.git
+cd SnipMagic_Mac
 
 # 首次构建前：创建固定的代码签名证书（只需执行一次，详见下方「签名说明」）
 ./create_signing_cert.sh
@@ -253,7 +257,7 @@ swift run ScreenshotTool
 >
 > **多架构说明**：本机为 Apple Silicon 时，脚本用 `swift build --triple x86_64-apple-macosx14.0.0` 交叉编译 Intel 版本，无需 Intel 机器。Swift 6.4 的 swift build 不支持 `--arch`，必须用 `--triple`；triple 版本号要跟 `Package.swift` 的 `platforms: [.macOS(.v14)]` 对齐。
 >
-> **架构约定**：`dist/截图工具.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图工具-v3.0.1.dmg` = arm64，`截图工具-v3.0.1-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
+> **架构约定**：`dist/截图大师SnipMagic.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图大师SnipMagic-v3.1.0.dmg` = arm64，`截图大师SnipMagic-v3.1.0-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
 
 ## 项目结构
 

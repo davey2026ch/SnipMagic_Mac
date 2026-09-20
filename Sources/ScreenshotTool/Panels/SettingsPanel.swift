@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 
 /// Toolbar settings sheet: capture/long-capture hotkeys, mosaic density, stroke
 /// thickness, MinerU extract timeout & token, theme, and the Volcengine API Key
-/// used by 魔法消除 (persisted to ~/.截图工具).
+/// used by 魔法消除 (persisted to ~/.SnipMagic.ini).
 final class SettingsPanel: NSViewController {
     private let onApply: (
         _ hotkey: (UInt32, UInt32)?,

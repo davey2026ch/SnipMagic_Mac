@@ -16,7 +16,7 @@ final class TrayService {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
             // Use SF Symbol so we don't need a custom asset.
-            let image = NSImage(systemSymbolName: "scissors", accessibilityDescription: "截图工具")
+            let image = NSImage(systemSymbolName: "scissors", accessibilityDescription: AppInfo.name)
             image?.isTemplate = true
             button.image = image
             button.toolTip = AppInfo.name

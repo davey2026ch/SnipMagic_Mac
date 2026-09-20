@@ -1,10 +1,10 @@
-# Screenshot Tool for macOS
+# SnipMagic for macOS
 
-A native macOS screenshot tool written in Swift: region capture, scrolling long capture,
+**SnipMagic** (截图大师) is a native macOS screenshot tool written in Swift: region capture, scrolling long capture,
 multi-tab annotation editing, side-by-side comparison, zooming, a screen colour picker and
 OCR text/table extraction — ready to use out of the box.
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v3.0.1-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v3.1.0-blue)
 
 English | [简体中文](README.md)
 
@@ -70,7 +70,7 @@ document-coordinate de-duplication, so overlapping scroll regions join without g
 
 ## Configuration file
 
-Everything is stored in `~/.截图工具` (created automatically on first launch):
+Everything is stored in `~/.SnipMagic.ini` (created automatically on first launch):
 
 ```
 capture_hotkey=Command+Shift+R
@@ -85,12 +85,16 @@ theme=system        # dark / light / system (default when missing)
 Older config files that do not contain `theme` are treated as **follow system**; saving the
 settings sheet writes the key back.
 
+> **Renamed in v3.1.0**: on first launch the app finds the legacy `~/.截图工具`, copies it to
+> `~/.SnipMagic.ini` (your MinerU token and Volcengine API key are kept) and renames the old
+> file to `~/.截图工具.bak`. This migration runs once.
+
 ## Installation
 
-1. Download the latest `.dmg` from [Gitee Releases](https://gitee.com/mrpu2020/screenshot-tool-Mac/releases):
-   - **Apple Silicon (M series)**: `截图工具-v3.0.1.dmg` (arm64)
-   - **Intel Mac**: `截图工具-v3.0.1-x86_64.dmg` (x86_64)
-2. Open the dmg and drag **截图工具** into `Applications`.
+1. Download the latest `.dmg` from [Gitee Releases](https://gitee.com/mrpu2020/SnipMagic_Mac/releases):
+   - **Apple Silicon (M series)**: `截图大师SnipMagic-v3.1.0.dmg` (arm64)
+   - **Intel Mac**: `截图大师SnipMagic-v3.1.0-x86_64.dmg` (x86_64)
+2. Open the dmg and drag **截图大师SnipMagic** into `Applications`.
 3. **First launch**: the build is ad-hoc signed, so right-click the app in `Applications` →
    **Open** → **Open** again to get past Gatekeeper.
 4. Grant **Screen Recording** permission when asked (restart the app afterwards for the
@@ -101,8 +105,8 @@ settings sheet writes the key back.
 ## Building from source
 
 ```bash
-git clone https://gitee.com/mrpu2020/screenshot-tool-Mac.git
-cd screenshot-tool-Mac
+git clone https://gitee.com/mrpu2020/SnipMagic_Mac.git
+cd SnipMagic_Mac
 
 # Run from source
 swift build --disable-sandbox
@@ -120,9 +124,9 @@ swift run ScreenshotTool
 
 `--disable-sandbox` is required for SwiftPM in restricted environments.
 
-**Architecture conventions**: `dist/截图工具.app` always contains the **arm64** build only
+**Architecture conventions**: `dist/截图大师SnipMagic.app` always contains the **arm64** build only
 (so it can be double-clicked locally); only the dmgs distinguish architectures
-(`截图工具-vX.dmg` = arm64, `截图工具-vX-x86_64.dmg` = Intel). Non-arm64 dmgs are assembled
+(`截图大师SnipMagic-vX.dmg` = arm64, `截图大师SnipMagic-vX-x86_64.dmg` = Intel). Non-arm64 dmgs are assembled
 in a temporary directory under `/tmp`, so `dist/` stays clean. Cross-compiling the Intel
 build only needs `swift build --triple x86_64-apple-macosx14.0.0` — no Intel machine needed.
 

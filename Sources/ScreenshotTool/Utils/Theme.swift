@@ -1,6 +1,6 @@
 import AppKit
 
-/// 主题模式，对应配置文件 ~/.截图工具 中的 `theme` 键。
+/// 主题模式，对应配置文件 ~/.SnipMagic.ini 中的 `theme` 键。
 /// 文件里没有这一项（老版本升级上来的配置）或值非法时，一律按 `.system`（跟随系统）处理。
 enum ThemeMode: String {
     case system
@@ -42,7 +42,7 @@ enum ThemeMode: String {
 extension Notification.Name {
     /// 主题切换后广播：用 layer 背景色（`.cgColor` 是取值瞬间的快照）自绘的视图
     /// 需要重新取一次色。
-    static let appThemeDidChange = Notification.Name("com.mimo.screenshottool.themeDidChange")
+    static let appThemeDidChange = Notification.Name("com.mimo.snipmagic.themeDidChange")
 }
 
 enum Theme {
@@ -136,10 +136,11 @@ final class AppearanceAwareView: NSView {
 }
 
 enum AppInfo {
-    static let name = "截图工具"
-    static let bundleID = "com.mimo.screenshottool"
+    /// 产品名：主窗口标题、托盘提示、App 菜单「关于 / 隐藏 / 退出」都用它。
+    static let name = "截图大师 SnipMagic"
+    static let bundleID = "com.mimo.snipmagic"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "3.0.1"
+    static let version = "3.1.0"
 }
 
 /// Borderless color swatch: flat rounded fill in the current brush color, no

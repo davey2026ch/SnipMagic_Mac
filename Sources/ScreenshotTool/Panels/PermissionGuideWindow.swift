@@ -84,8 +84,8 @@ final class PermissionGuideWindowController: NSWindowController {
         let body = NSTextField(wrappingLabelWithString: """
         1. 点「申请录屏权限」，系统会弹出授权提示（若已弹过可忽略）
         2. 打开 系统设置 → 隐私与安全性 → 屏幕录制
-        3. 在列表中找到「截图工具」并打开开关
-           若列表没有本软件：点左下角「+」，选择 应用程序 里的「截图工具」
+        3. 在列表中找到「截图大师 SnipMagic」并打开开关
+           若列表没有本软件：点左下角「+」，选择 应用程序 里的「截图大师SnipMagic」
         4. 开启后请点下方「退出并重新打开」——macOS 要求完全重启进程，权限才会生效
         """)
         body.font = .systemFont(ofSize: 13)
@@ -93,7 +93,7 @@ final class PermissionGuideWindowController: NSWindowController {
         stack.addArrangedSubview(body)
 
         let pathHint = NSTextField(wrappingLabelWithString: """
-        提示：请始终从「应用程序」里的「截图工具」启动。路径变动或每次重新打包（代码签名变化）后，系统可能要求重新授权。
+        提示：请始终从「应用程序」里的「截图大师SnipMagic」启动。路径变动或每次重新打包（代码签名变化）后，系统可能要求重新授权。
         """)
         pathHint.font = .systemFont(ofSize: 12)
         pathHint.textColor = .secondaryLabelColor
@@ -160,8 +160,8 @@ final class PermissionGuideWindowController: NSWindowController {
                 macOS 对「屏幕录制」的要求是：在系统设置里打开开关后，必须完全退出本软件再重新打开，当前进程才会拿到权限。
 
                 请确认：
-                1. 「屏幕录制」列表里能看到「截图工具」且开关已打开
-                2. 若列表没有：点「+」添加 应用程序/截图工具
+                1. 「屏幕录制」列表里能看到「截图大师 SnipMagic」且开关已打开
+                2. 若列表没有：点「+」添加 应用程序/截图大师SnipMagic
                 3. 点下方「退出并重新打开」后再试
 
                 若开关是打开的但仍无效：多半是重新打包后代码签名变了，可先关掉开关再打开，或删除列表项后重新添加。

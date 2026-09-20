@@ -26,7 +26,7 @@ final class LongCaptureSessionController {
     private var consecutiveErrors = 0
     private var lastPreviewAt: CFTimeInterval = 0
 
-    private let stitchQueue = DispatchQueue(label: "com.mimo.screenshottool.longcapture", qos: .userInitiated)
+    private let stitchQueue = DispatchQueue(label: "com.mimo.snipmagic.longcapture", qos: .userInitiated)
     private var builder: LongScreenshotBuilder?
     private var lastFrame: FrameData?
     private var activityToken: NSObjectProtocol?

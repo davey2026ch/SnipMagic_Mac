@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let defaultsKeyLogin = "launchAtLogin"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MinerUOCRService.ensureConfigFile() // ~/.截图工具 不存在则自动创建
+        MinerUOCRService.ensureConfigFile() // ~/.SnipMagic.ini 不存在则自动创建（含旧配置文件一次性迁移）
         // 主题：配置里没有 theme 键（老版本升级上来的文件）时按「跟随系统」处理。
         // 必须在建窗之前应用，否则首帧会用旧配色。
         let persisted = MinerUOCRService.loadConfig()

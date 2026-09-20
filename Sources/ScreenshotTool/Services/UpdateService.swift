@@ -69,17 +69,17 @@ enum UpdateError: LocalizedError {
 ///    全程不静默替换用户的 App。
 ///
 /// 附件命名约定（与 build_app.sh 一致）：
-///   `截图工具-v2.4.0.dmg`            → arm64
-///   `截图工具-v2.4.0-x86_64.dmg`     → Intel
-///   `截图工具-v2.4.0-universal.dmg`  → 通用，兜底
+///   `截图大师SnipMagic-v3.1.0.dmg`            → arm64
+///   `截图大师SnipMagic-v3.1.0-x86_64.dmg`     → Intel
+///   `截图大师SnipMagic-v3.1.0-universal.dmg`  → 通用，兜底
 final class UpdateService: NSObject {
     static let shared = UpdateService()
 
     // MARK: - 常量
 
     private static let owner = "mrpu2020"
-    private static let repo = "screenshot-tool-Mac"
-    private static let apiRoot = "https://gitee.com/api/v5/repos/mrpu2020/screenshot-tool-Mac"
+    private static let repo = "SnipMagic_Mac"
+    private static let apiRoot = "https://gitee.com/api/v5/repos/mrpu2020/SnipMagic_Mac"
     /// 启动后延迟多久做首次静默检测，避开首帧渲染与权限弹窗。
     static let launchCheckDelay: TimeInterval = 3.0
 
@@ -150,7 +150,7 @@ final class UpdateService: NSObject {
             return
         }
         var request = URLRequest(url: url)
-        request.setValue("ScreenshotTool/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("SnipMagic/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
@@ -470,15 +470,15 @@ final class UpdateService: NSObject {
         downloadCompletion = completion
 
         var request = URLRequest(url: asset.url)
-        request.setValue("ScreenshotTool/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("SnipMagic/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
         downloadSession.downloadTask(with: request).resume()
     }
 
-    /// 下载目录：~/Library/Caches/截图工具/updates/
+    /// 下载目录：~/Library/Caches/截图大师SnipMagic/updates/
     static var updateDirectory: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        return base.appendingPathComponent("截图工具/updates", isDirectory: true)
+        return base.appendingPathComponent("截图大师SnipMagic/updates", isDirectory: true)
     }
 
     private func finishDownload(_ result: Result<URL, Error>) {
@@ -551,7 +551,7 @@ final class UpdateService: NSObject {
     private static func stageApp(fromDMG dmgURL: URL) throws -> URL {
         let fileManager = FileManager.default
         let mountPoint = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("截图工具-mount-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("SnipMagic-mount-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: mountPoint, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: mountPoint) }
 
@@ -600,7 +600,7 @@ final class UpdateService: NSObject {
 
         let script = """
         #!/bin/bash
-        # 由「截图工具」自动更新生成：等旧进程退出 → 替换 .app → 重新打开。
+        # 由「截图大师 SnipMagic」自动更新生成：等旧进程退出 → 替换 .app → 重新打开。
         # 失败时一律回滚，最差情况也只是弹出 dmg 让用户手动安装。
         APP=\(shellQuoted(targetApp.path))
         NEW=\(shellQuoted(stagedApp.path))

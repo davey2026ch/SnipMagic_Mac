@@ -132,6 +132,7 @@ final class SettingsPanel: NSViewController {
         configureNumberField(thicknessField, value: thicknessSeed)
         configureNumberField(eraseBrushField, value: eraseBrushSeed)
         configureNumberField(timeoutField, value: timeoutFieldSeed)
+        timeoutField.toolTip = MinerUOCRService.AgentTimeout.unitTooltip
         configureThemePopup()
         configureUpdateControls()
         tokenRow.delegate = self
@@ -149,7 +150,7 @@ final class SettingsPanel: NSViewController {
             [makeFieldLabel("马赛克密度"), mosaicField, makeUnitLabel("2–64 像素/格")],
             [makeFieldLabel("线条粗细"), thicknessField, makeUnitLabel("1–40 像素")],
             [makeFieldLabel("刷子粗细"), eraseBrushField, makeUnitLabel("4–240 像素")],
-            [makeFieldLabel("超时时间"), timeoutField, makeUnitLabel("5–600 秒")],
+            [makeFieldLabel("超时时间"), timeoutField, makeUnitLabel(MinerUOCRService.AgentTimeout.unitHint)],
             [makeFieldLabel("MinerU token"), tokenRow.stack, makeUnitLabel("精准解析用")],
             [makeFieldLabel("火山 API Key"), volcRow.stack, makeUnitLabel("擦除/抠图用")],
             [makeFieldLabel("版本更新"), updateRow, makeUnitLabel("")]
@@ -165,7 +166,7 @@ final class SettingsPanel: NSViewController {
             grid.row(at: row).height = 28
         }
 
-        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。火山 API Key 供工具栏的「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）使用；留空则这两个按钮都会提示去配置。「检查更新」到 Gitee 上查最新版本，按本机芯片自动匹配安装包；发现新版本只会先询问，同意后才下载并替换。")
+        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；「填 0」表示跳过轻量解析、直接使用精准解析（需先填好 MinerU token）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。火山 API Key 供工具栏的「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）使用；留空则这两个按钮都会提示去配置。「检查更新」到 Gitee 上查最新版本，按本机芯片自动匹配安装包；发现新版本只会先询问，同意后才下载并替换。")
         tip.font = .systemFont(ofSize: 11)
         tip.textColor = .secondaryLabelColor
         tip.translatesAutoresizingMaskIntoConstraints = false
@@ -452,7 +453,7 @@ final class SettingsPanel: NSViewController {
         let mosaic = max(2, min(64, mosaicField.doubleValue))
         let thickness = max(1, min(40, thicknessField.doubleValue))
         let eraseBrush = max(4, min(240, eraseBrushField.doubleValue))
-        let timeout = max(5, min(600, timeoutField.doubleValue))
+        let timeout = MinerUOCRService.AgentTimeout.clamp(timeoutField.doubleValue)
         let token = tokenRow.value.trimmingCharacters(in: .whitespacesAndNewlines)
         let volcKey = volcRow.value.trimmingCharacters(in: .whitespacesAndNewlines)
         onApply(

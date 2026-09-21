@@ -3,12 +3,18 @@ import AppKit
 /// 侧栏工具按钮。
 ///
 /// 原生 `.smallSquare` 切换按钮的按下态太轻，亮色主题下几乎看不出
-/// "接下来画什么"，所以这两件事自己画：
+/// "接下来画什么"，所以这三件事自己画：
 /// - **激活态**：底色铺主题蓝 + 图标转白（与顶部「开始截图」、活动页签同一套配色）；
+/// - **悬停态**：淡色底衬，鼠标指到哪个一眼可见（纯图标列没有底衬会显得很"死"）；
 /// - **锁定态**：右下角挂一个小锁角标（双击本按钮锁定 → 连续绘制，再单击解除）。
 ///
 /// 用 unbordered + 自绘 layer，是照 `CapturePrimaryButton` 的路子来的：
 /// 系统 bezel 的配色在不同主题下不好统一，自绘反而更稳。
+///
+/// ⚠️ **常态图标色不要改回 `secondaryLabelColor`**。那一档在亮色下只有约 50% 黑，
+/// 而这批符号（`square.dashed` / `oval` / `rectangle`…）笔画本来就细，
+/// 再压一半透明度就是用户说的"灰蒙蒙"。现在走 `Theme.toolIconIdle`（= labelColor），
+/// 同时把符号字重从 `.regular` 提到 `.medium`、字号 14 → 15 —— 三处一起才够精神。
 final class ToolButton: NSButton {
     let tool: ToolKind
 
@@ -21,6 +27,17 @@ final class ToolButton: NSButton {
     /// 无 SF Symbol 时退化成文字（如「T」），要把文字留一份自己上色 ——
     /// `title` 走系统配色，在蓝底上会变成黑字看不见。
     private var labelText = ""
+    /// 符号图标的显示规格：字号 / 字重。
+    private static let symbolPointSize: CGFloat = 15
+    private static let symbolWeight: NSFont.Weight = .medium
+
+    private var isHovered = false {
+        didSet {
+            guard isHovered != oldValue else { return }
+            applyAppearance()
+        }
+    }
+    private var trackingArea: NSTrackingArea?
 
     init(tool: ToolKind, target: AnyObject?, action: Selector?) {
         self.tool = tool
@@ -51,15 +68,16 @@ final class ToolButton: NSButton {
         if tool == .text {
             // 文本工具用加粗「T」，比 SF Symbol 更好认
             labelText = "T"
-            font = .systemFont(ofSize: 15, weight: .bold)
+            font = .systemFont(ofSize: 16, weight: .semibold)
             imagePosition = .noImage
         } else if let image = NSImage(systemSymbolName: tool.systemImage,
                                       accessibilityDescription: tool.displayName)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) {
+            .withSymbolConfiguration(.init(pointSize: Self.symbolPointSize,
+                                           weight: Self.symbolWeight)) {
             self.image = image
         } else {
             labelText = tool.shortLabel
-            font = .systemFont(ofSize: 9, weight: .medium)
+            font = .systemFont(ofSize: 10, weight: .semibold)
             imagePosition = .noImage
         }
     }
@@ -83,8 +101,17 @@ final class ToolButton: NSButton {
     /// 后必须重来一次，否则蓝底会停在旧配色上。
     private func applyAppearance() {
         let active = isActiveTool
-        layer?.backgroundColor = active ? Theme.resolved(Theme.accent) : NSColor.clear.cgColor
-        let tint: NSColor = active ? .white : .secondaryLabelColor
+        if active {
+            layer?.backgroundColor = Theme.resolved(Theme.accent)
+        } else if isHovered {
+            layer?.backgroundColor = Theme.resolved(Theme.toolIconHoverBackground)
+        } else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+        }
+
+        // 常态图标色见类注释：不用 secondaryLabelColor。悬停不改图标色，
+        // 区别全在底衬上（常态已经是 labelColor，没有更实的一档可用了）。
+        let tint: NSColor = active ? .white : Theme.toolIconIdle
         contentTintColor = tint
         if !labelText.isEmpty {
             attributedTitle = NSAttributedString(string: labelText, attributes: [
@@ -97,12 +124,35 @@ final class ToolButton: NSButton {
         lockBadge.contentTintColor = active ? .white : Theme.accent
     }
 
+    // MARK: - 悬停
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+
     /// 按下时给一点即时反馈（未激活态才需要：激活态本来就是蓝底）。
     override func mouseDown(with event: NSEvent) {
         if !isActiveTool {
-            layer?.backgroundColor = Theme.resolved(NSColor.separatorColor.withAlphaComponent(0.35))
+            layer?.backgroundColor = Theme.resolved(Theme.toolIconPressedBackground)
         }
         super.mouseDown(with: event)
-        layer?.backgroundColor = isActiveTool ? Theme.resolved(Theme.accent) : NSColor.clear.cgColor
+        applyAppearance()
     }
 }

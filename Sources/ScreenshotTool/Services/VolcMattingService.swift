@@ -13,7 +13,8 @@ import Foundation
 ///
 /// 三个关键设计，别改坏：
 /// - **送出去的必须是"所见"的合成图局部**（底图 + 浮动图层），不是底层位图，
-///   否则浮动图层里的主体抠不出来。
+///   否则浮动图层里的主体抠不出来。唯一的例外是"选中的浮动图层"这一种输入：
+///   它本来就只有自己那一块，直接送图层自身像素（并靠 `anchor` 把坐标平移回画布）。
 /// - **选区外扩 16px 上下文**只为了帮模型看清主体边缘；结果只取主体区域，
 ///   外扩不影响定位（定位靠 alpha 包围盒）。
 /// - **`need_crop_background` 绝不开**：它会把结果图裁成主体大小，几何对齐就没了，
@@ -129,14 +130,20 @@ enum VolcMattingService {
         }
     }
 
-    /// 从 `image` 的 `region`（画布图像坐标、左上原点）里抠出主体。
+    /// 从 `image` 的 `region`（该图自身的左上原点坐标）里抠出主体。
     ///
+    /// - Parameters:
+    ///   - anchor: `image` 左上角在**画布**坐标里的位置。默认 `.zero`（image 即整张画布）。
+    ///     上送"浮动图层自身像素"时传图层的落点，否则结果会被摆到画布左上角。
+    ///   - canvasSize: 画布尺寸，供"错开摆放"夹边界用；nil 时按 `image` 尺寸算。
     /// - Returns: 主体图 + 它在画布上的位置（**没有透明边的干净图层**）。
     /// - Throws: `MattingError`（本地输入问题）或 `MediaKitClient.Error`（链路问题）。
     ///   接口级失败（网络 / 参数错）**不重试** —— 避免重复扣费，直接报错。
     static func extractSubject(
         in image: CGImage,
         region: CGRect,
+        anchor: CGPoint = .zero,
+        canvasSize: CGSize? = nil,
         apiKey: String,
         options: Options = .default,
         cancel: MediaKitClient.CancelToken? = nil,
@@ -146,6 +153,7 @@ enum VolcMattingService {
         try MediaKitClient.checkCancelled(cancel)
 
         let bounds = CGRect(x: 0, y: 0, width: CGFloat(image.width), height: CGFloat(image.height))
+        let canvas = canvasSize ?? bounds.size
         let selection = region.standardized.integral.intersection(bounds)
         try validate(region: selection, options: options)
 
@@ -193,10 +201,11 @@ enum VolcMattingService {
             let ratioX = scope.width / CGFloat(scan.width)
             let ratioY = scope.height / CGFloat(scan.height)
             let size = CGSize(width: scan.box.width * ratioX, height: scan.box.height * ratioY)
-            let raw = CGPoint(x: scope.minX + scan.box.minX * ratioX,
-                              y: scope.minY + scan.box.minY * ratioY)
+            // 先算上送图内部的落点，再加回这张图在画布上的位置（anchor）。
+            let raw = CGPoint(x: anchor.x + scope.minX + scan.box.minX * ratioX,
+                              y: anchor.y + scope.minY + scan.box.minY * ratioY)
             let placement = placement(for: size, at: raw,
-                                      canvas: bounds.size, options: options)
+                                      canvas: canvas, options: options)
             return Subject(image: subject, origin: placement.origin, size: size,
                            offset: placement.offset, scene: scene, coverage: scan.coverage)
         }

@@ -102,7 +102,7 @@ enum MinerUOCRError: LocalizedError {
 /// 1. 优先 Agent 轻量解析（免登录免 Token，IP 限频，仅输出 Markdown）；
 /// 2. 失败时降级到精准解析 API（vlm 模型，Token 取自 ~/.SnipMagic.ini，
 ///    走 /api/v4/file-urls/batch 预签名上传，结果为 zip，取其中 full.md）。
-/// 配置文件 ~/.SnipMagic.ini：token=sk-xxx（vlm 令牌）、agent_timeout=20（轻量等待秒数）、
+/// 配置文件 ~/.SnipMagic.ini：token=sk-xxx（vlm 令牌）、agent_timeout=20（轻量等待秒数，0 = 跳过轻量直接用精准）、
 /// theme=system|light|dark（主题，缺省按跟随系统）。
 enum MinerUOCRService {
     private static let agentBaseURL = URL(string: "https://mineru.net/api/v1/agent")!
@@ -114,8 +114,9 @@ enum MinerUOCRService {
 
     struct MinerUConfig {
         var token: String?
-    /// 轻量级接口等待秒数；超时后降级精准解析（vlm）。默认 10。
-    var agentTimeout: TimeInterval = 10
+        /// 轻量级接口等待秒数；超时后降级精准解析（vlm）。默认 10。
+        /// **0 = 根本不走轻量解析，直接使用精准解析（vlm）**。
+        var agentTimeout: TimeInterval = 10
         /// 区域截图快捷键（如 Command+Shift+R）。nil = 使用内置默认。
         var captureHotkey: (keyCode: UInt32, modifiers: UInt32)?
         /// 长截图快捷键。nil = 使用内置默认。
@@ -134,6 +135,30 @@ enum MinerUOCRService {
 
         /// 与代码内置默认值完全一致的配置。
         static let defaults = MinerUConfig()
+    }
+
+    /// 「超时时间」的范围与含义：界面、配置文件、解析链路共用这一份定义，
+    /// 免得三处各写一个数字。**下限是 0 而不是 5** —— 0 表示跳过轻量解析，
+    /// 直接用精准解析（vlm）。
+    enum AgentTimeout {
+        static let range: ClosedRange<Double> = 0...600
+        /// ⚠️ 单位说明必须**短**：设置面板是 NSGridView，第三列的宽度由该列最宽的
+        /// 一格决定 —— 这里多写十几个字，整张表就会被顶宽（713 → 795），
+        /// 720 宽的面板直接装不下。所以"0 是什么意思"放 tooltip 和底部说明里说。
+        static let unitHint = "0–600 秒"
+        /// 输入框 hover 提示：真正解释 0 的含义。
+        static let unitTooltip = """
+        轻量解析（agent）的等待秒数，超时自动改用精准解析（vlm）。
+        填 0 表示跳过轻量解析、直接使用精准解析 —— 需要先在「MinerU token」里填好令牌。
+        """
+
+        static func clamp(_ value: Double) -> TimeInterval {
+            guard value.isFinite else { return MinerUConfig.defaults.agentTimeout }
+            return min(max(value, range.lowerBound), range.upperBound)
+        }
+
+        /// 是否跳过轻量（agent）链路 —— 0 或负数都算"跳过"。
+        static func skipsAgent(_ value: TimeInterval) -> Bool { value <= 0 }
     }
 
     /// 配置文件路径。产品改名（截图工具 → 截图大师 SnipMagic）后统一为这个文件名。
@@ -199,7 +224,7 @@ enum MinerUOCRService {
                 if !value.isEmpty { config.token = value }
             case "agent_timeout", "agenttimeout", "timeout":
                 if let seconds = Double(value) {
-                    config.agentTimeout = min(max(seconds, 5), 600)
+                    config.agentTimeout = AgentTimeout.clamp(seconds)
                 }
             case "capture_hotkey":
                 config.captureHotkey = HotkeyService.parse(value)
@@ -243,7 +268,7 @@ enum MinerUOCRService {
         config.thickness = min(max(thickness, 1), 40)
         config.eraseBrush = min(max(eraseBrush, 4), 240)
         config.token = token
-        config.agentTimeout = min(max(agentTimeout, 5), 600)
+        config.agentTimeout = AgentTimeout.clamp(agentTimeout)
         config.theme = theme
         config.volcKey = volcKey
         try? configTemplate(config: config)
@@ -270,7 +295,8 @@ enum MinerUOCRService {
         erase_brush=\(Int(config.eraseBrush))
         # MinerU token：精准解析（vlm）接口所需令牌，在 mineru.net 的「API 管理」页面创建；轻量解析无需 token
         token=\(config.token ?? "")
-        # 超时时间：轻量级接口的等待秒数，超时后自动降级到精准解析（vlm）；有效范围 5~600
+        # 超时时间：轻量级接口的等待秒数，超时后自动降级到精准解析（vlm）；有效范围 0~600，
+        # 填 0 表示跳过轻量解析、直接使用精准解析（vlm）
         agent_timeout=\(Int(config.agentTimeout))
         # 主题：dark=暗色 / light=亮色 / system=跟随系统（默认）；本项缺失或无法识别时按「跟随系统」处理
         theme=\(config.theme.configValue)
@@ -315,6 +341,24 @@ enum MinerUOCRService {
 
         func stage(_ text: String) {
             DispatchQueue.main.async { onStage(text) }
+        }
+
+        // ---- 0. 超时时间设为 0：跳过轻量解析，直接走精准（vlm） ----
+        // 用户把「超时时间」填 0 的意思就是"别试轻量了，一次到位"。这条分支要早于
+        // runAgent，否则轻量链路照样会发一次请求（等于没跳过）。
+        if AgentTimeout.skipsAgent(config.agentTimeout) {
+            stage("已按设置跳过轻量解析，直接使用精准解析（vlm）…")
+            runPrecise(task: task, token: config.token, imageData: imageData, fileName: fileName) { preciseResult in
+                switch preciseResult {
+                case .success(let outcome):
+                    finish(.success((outcome.markdown, outcome.images, .precise)))
+                case .failure(let preciseError):
+                    guard !task.isCancelled else { return }
+                    if case MinerUOCRError.cancelled = preciseError { return }
+                    finish(.failure(preciseError))
+                }
+            }
+            return task
         }
 
         // ---- 1. Agent 轻量解析（免 Token，等待时长可配置） ----

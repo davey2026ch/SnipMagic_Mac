@@ -249,23 +249,36 @@ final class EditorViewController: NSViewController {
         longCaptureBtn.toolTip = "框选区域后滚动页面（网页/文档），自动拼接为长图"
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
-        magicEraseBtn = makeToolButton("🪄 魔法消除", action: #selector(magicEraseClicked))
-        magicEraseBtn.toolTip = "用「擦除刷」刷出要抹掉的部分，或直接用「框选」框一块，再点这里：由火山引擎的图像修复模型重建背景（纹理还原好，图片会上传到火山引擎）"
-        extractVectorBtn = makeToolButton("提取矢量图", icon: "seal.fill", action: #selector(extractVectorClicked))
+        // 下面这三个 AI 按钮**按用户指定顺序排**：提取内容 → 提取矢量图 → 魔法消除
+        // （"先取文字、再抠图、最后擦除"的使用节奏）。要改顺序先问一句，别随手调。
+        extractContentBtn = makeToolButton("📋 提取内容", action: #selector(extractContentClicked))
+        extractContentBtn.toolTip = """
+        OCR 识别文字 / 表格，结果以 Markdown 返回并自动复制。
+        识别范围：①有浮动图层被激活选中 → 只识别那一块；②框了选区 → 只识别框内；
+        ③两样都没有 → 识别整张图。
+        """
+        extractVectorBtn = makeToolButton(
+            "提取矢量图",
+            customIcon: ExtractSubjectIcon.toolbarImage(),
+            action: #selector(extractVectorClicked)
+        )
         extractVectorBtn.toolTip = """
-        框选主体（或用「框选」点中一个浮动图层）后点这里：由火山引擎抠图，把主体从背景里抠出来，
-        落成一个透明底图层放回画布 —— 可拖动、可缩放，⌘C 复制到微信 / Keynote / Word 也保留透明。
+        框选主体，或用「框选」点中一个浮动图层（那一块就处于激活选中态），再点这里：
+        由火山引擎抠图，把主体从背景里抠出来，落成一个透明底图层放回画布 ——
+        可拖动、可缩放，⌘C 复制到微信 / Keynote / Word 也保留透明。
+        抠的就是你选中的这一块：选中浮动图层时只用图层自身的像素，不含它下面那一层。
         图片会上传到火山引擎；选区别贴太紧，留一圈背景更好认。
         """
-        extractContentBtn = makeToolButton("📋 提取内容", action: #selector(extractContentClicked))
-        extractContentBtn.toolTip = "OCR 识别当前页签图片中的文字/表格（有选区则只识别选区），结果以 Markdown 返回并自动复制"
+        magicEraseBtn = makeToolButton("🪄 魔法消除", action: #selector(magicEraseClicked))
+        magicEraseBtn.toolTip = "用「擦除刷」刷出要抹掉的部分，或直接用「框选」框一块，再点这里：由火山引擎的图像修复模型重建背景（纹理还原好，图片会上传到火山引擎）"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
         let saveAllBtn = makeToolButton("💾 全部保存", action: #selector(saveAllTabs))
         saveAllBtn.toolTip = "将全部页签导出到指定文件夹（文件类型可选，默认 PNG；当前页签单张保存用 ⌘S）"
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, longCaptureBtn, mosaicBtn, magicEraseBtn, extractVectorBtn, extractContentBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
+        // 数组顺序 = 界面上从左到右的顺序，调 UI 排序改这一行即可。
+        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractContentBtn, extractVectorBtn, magicEraseBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -723,15 +736,23 @@ final class EditorViewController: NSViewController {
     }
 
     /// 工具栏的次要按钮。大多数用 emoji 当图标（写在标题里）；
-    /// 需要"正经"图标时传 SF Symbol 名 —— 注意 macOS 里没有 `stamp` 这个符号，
-    /// 形状最接近「小印章」的是 `seal.fill`（UI 上用过，别改成不存在的名字）。
-    private func makeToolButton(_ title: String, icon: String? = nil, action: Selector) -> NSButton {
+    /// 需要"正经"图标时二选一：
+    /// - `icon` 传 SF Symbol 名（注意 macOS 里没有 `stamp` 这个符号，别写不存在的名字）；
+    /// - `customIcon` 传自绘 / 内嵌位图，比如 `ExtractSubjectIcon`（提取矢量图的图标）。
+    private func makeToolButton(
+        _ title: String,
+        icon: String? = nil,
+        customIcon: NSImage? = nil,
+        action: Selector
+    ) -> NSButton {
         let b = NSButton(title: title, target: self, action: action)
         b.bezelStyle = .rounded
         b.font = .systemFont(ofSize: 13)
-        if let icon,
-           let image = NSImage(systemSymbolName: icon, accessibilityDescription: title)?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) {
+        let symbol = icon.flatMap {
+            NSImage(systemSymbolName: $0, accessibilityDescription: title)?
+                .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        }
+        if let image = customIcon ?? symbol {
             b.image = image
             b.imagePosition = .imageLeading
             b.imageHugsTitle = true
@@ -1161,7 +1182,8 @@ final class EditorViewController: NSViewController {
             alert.informativeText = """
             两种方式任选：
             · 用「框选」工具在图上拖一个框，把主体连同一圈背景一起框进来
-            · 或者用「框选」点中一个浮动图层，再点这里
+            · 或者用「框选」点中一个浮动图层（粘贴块 / 已抠出的主体），再点这里
+            有浮动图层处于激活选中态时，就只处理那一块 —— 不会带上它下面那一层。
             """
             alert.runModal()
             return
@@ -1352,7 +1374,7 @@ final class EditorViewController: NSViewController {
 
     @objc private func extractContentClicked() {
         guard !isOCRRunning else { return }
-        guard let tab = currentTab else {
+        guard currentTab != nil else {
             let a = NSAlert()
             a.messageText = "还没有截图"
             a.informativeText = "先截一张图，再使用「提取内容」。"
@@ -1360,15 +1382,15 @@ final class EditorViewController: NSViewController {
             return
         }
 
-        let selection = canvas.selectionRect
-        let hasSelection = selection.width > 2 && selection.height > 2
-        let sourceImage: CGImage?
-        if hasSelection {
-            sourceImage = tab.renderRegion(selection)
-        } else {
-            sourceImage = tab.renderComposite()
+        // 取图优先级都收在画布侧：激活选中的浮动图层 → 橡皮筋选区 → 整张图。
+        guard let source = canvas.contentExtractionImage() else {
+            let a = NSAlert()
+            a.messageText = "无法导出图片"
+            a.informativeText = "请重试，或先保存当前截图。"
+            a.runModal()
+            return
         }
-        guard let image = sourceImage, let png = MinerUOCRService.encodePNG(image) else {
+        guard let png = MinerUOCRService.encodePNG(source.image) else {
             let a = NSAlert()
             a.messageText = "无法导出图片"
             a.informativeText = "请重试，或先保存当前截图。"
@@ -1378,7 +1400,7 @@ final class EditorViewController: NSViewController {
 
         isOCRRunning = true
         extractContentBtn.isEnabled = false
-        showOCRProgress(scopedToSelection: hasSelection)
+        showOCRProgress(source: source.scope)
 
         extractTask = MinerUOCRService.extract(
             imageData: png,
@@ -1403,10 +1425,18 @@ final class EditorViewController: NSViewController {
                     if case MinerUOCRError.tokenInvalid(let msg)? = error as? MinerUOCRError { tokenIssue = .tokenInvalid(msg) }
                     if let tokenIssue {
                         a.messageText = "需要配置可用的 MinerU Token"
+                        // 「超时时间 = 0」是"跳过轻量、直接用精准"，这时说"轻量解析失败后
+                        // 需使用精准解析"就不对了 —— 按配置文件里的实际设置给不同措辞。
+                        let reason = MinerUOCRService.AgentTimeout.skipsAgent(
+                            MinerUOCRService.loadConfig().agentTimeout
+                        )
+                            ? "「超时时间」设为 0，已跳过轻量解析、直接使用精准解析（vlm），但 Token"
+                            : "轻量解析失败后需使用精准解析（vlm），但 Token"
                         a.informativeText = """
-                        轻量解析失败后需使用精准解析（vlm），但 Token \(tokenIssue.localizedDescription)。
+                        \(reason) \(tokenIssue.localizedDescription)。
 
-                        请点工具栏「⚙️ 设置」，在「MinerU token」一栏填写或更新后重试。
+                        请点工具栏「⚙️ 设置」，在「MinerU token」一栏填写或更新后重试；
+                        也可以把「超时时间」调回大于 0 的值，改走免 Token 的轻量解析。
                         Token 可在 mineru.net 的「API 管理」页面创建。
                         """
                     } else {
@@ -1415,10 +1445,8 @@ final class EditorViewController: NSViewController {
                     }
                     a.runModal()
                 case .success(let outcome):
-                    // Auto-copy to clipboard so the user can paste anywhere.
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(outcome.markdown, forType: .string)
+                    // 剪贴板由结果窗统一写（写的是「查看模式」的富文本 + 渲染后纯文本，
+                    // 不是生 Markdown 源码），见 ExtractResultPanel.copyRenderedToPasteboard()。
                     self.presentExtractResult(markdown: outcome.markdown, images: outcome.images, mode: outcome.mode)
                 }
             }
@@ -1430,7 +1458,7 @@ final class EditorViewController: NSViewController {
         // Completion fires with .cancelled and performs the UI cleanup.
     }
 
-    private func showOCRProgress(scopedToSelection: Bool) {
+    private func showOCRProgress(source: CanvasView.ExtractionScope) {
         hideOCRProgress()
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 190),
@@ -1473,7 +1501,7 @@ final class EditorViewController: NSViewController {
         label.alignment = .center
         stack.addArrangedSubview(label)
 
-        let sub = NSTextField(labelWithString: scopedToSelection ? "识别选区 · MinerU 轻量解析" : "识别整图 · MinerU 轻量解析")
+        let sub = NSTextField(labelWithString: "识别\(source.label) · MinerU 轻量解析")
         sub.font = .systemFont(ofSize: 11)
         sub.textColor = .secondaryLabelColor
         sub.alignment = .center

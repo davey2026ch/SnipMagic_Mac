@@ -4,7 +4,7 @@
 multi-tab annotation editing, side-by-side comparison, zooming, a screen colour picker and
 OCR text/table extraction — ready to use out of the box.
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v3.1.0-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v3.3.0-blue)
 
 English | [简体中文](README.md)
 
@@ -101,8 +101,8 @@ settings sheet writes the key back.
 ## Installation
 
 1. Download the latest `.dmg` from [Gitee Releases](https://gitee.com/mrpu2020/SnipMagic_Mac/releases):
-   - **Apple Silicon (M series)**: `截图大师SnipMagic-v3.1.0.dmg` (arm64)
-   - **Intel Mac**: `截图大师SnipMagic-v3.1.0-x86_64.dmg` (x86_64)
+   - **Apple Silicon (M series)**: `截图大师SnipMagic-v3.3.0.dmg` (arm64)
+   - **Intel Mac**: `截图大师SnipMagic-v3.3.0-x86_64.dmg` (x86_64)
 2. Open the dmg and drag **截图大师SnipMagic** into `Applications`.
 3. **First launch**: the build is ad-hoc signed, so right-click the app in `Applications` →
    **Open** → **Open** again to get past Gatekeeper.

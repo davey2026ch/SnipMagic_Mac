@@ -108,6 +108,27 @@ enum Theme {
     static var danger: NSColor { NSColor.systemRed }
     static var mutedText: NSColor { NSColor.secondaryLabelColor }
 
+    // MARK: - 侧栏工具图标
+
+    /// 侧栏工具图标的**常态**颜色。
+    ///
+    /// 刻意不用 `secondaryLabelColor`：它在亮色下只有约 50% 黑，而侧栏那批图标
+    /// （`square.dashed` / `oval` / `rectangle` 这些**细线**符号）本来就笔画轻，
+    /// 再降到半透明就成了"灰蒙蒙一片"，看不出画的是什么。这里用 `labelColor`
+    /// —— 亮色下约 85% 黑、暗色下接近白，对比度直接拉满。
+    /// 返回的是**动态系统色**，随 appearance 自动解析，不必等主题广播重取。
+    static var toolIconIdle: NSColor { NSColor.labelColor }
+
+    /// 悬停时的底衬。用 labelColor 的低透明度叠层：亮色是淡灰、暗色是淡白，
+    /// 一套取值两种主题都成立。
+    ///
+    /// 刻意**不给悬停单独配一个更深的图标色** —— 常态已经是 `labelColor`（最实的一档），
+    /// 再往上只能动背景。所以"悬停"这件事靠底衬表达，图标本身不变。
+    static var toolIconHoverBackground: NSColor { NSColor.labelColor.withAlphaComponent(0.09) }
+
+    /// 按下时的底衬，比悬停略重。
+    static var toolIconPressedBackground: NSColor { NSColor.labelColor.withAlphaComponent(0.16) }
+
     static let cornerRadius: CGFloat = 8
 
     /// 取「动态系统色」在当前 appearance 下的 CGColor。
@@ -140,7 +161,7 @@ enum AppInfo {
     static let name = "截图大师 SnipMagic"
     static let bundleID = "com.mimo.snipmagic"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "3.2.0"
+    static let version = "3.3.0"
 }
 
 /// Borderless color swatch: flat rounded fill in the current brush color, no

@@ -1106,14 +1106,125 @@ final class CanvasView: NSView {
         }
     }
 
-    // MARK: - 提取矢量图（火山引擎 AI MediaKit 云端抠图）
+    // MARK: - 提取内容（OCR）与 提取矢量图（云端抠图）的作用对象
 
-    /// 抠图的目标区域：橡皮筋选区优先；没有选区时，退而取选中的浮动图层包围盒
-    /// ——「选中一块浮动图层再抠」和「框一块再抠」是同一件事的两种手势。
+    /// 「提取」类操作当前作用在什么上 —— 决定送出去的是哪一块像素。
+    enum ExtractionScope: Equatable {
+        /// 有浮动图层处于激活选中态：只认**这个图层自己的像素**，
+        /// 不含它下面那一层（底图 / 别的图层）。
+        case floatingLayer
+        /// 橡皮筋框选：认框内的画面。
+        case selection
+        /// 什么都没选：整张图。
+        case wholeImage
+
+        /// 给用户的一句说明（进度浮层 / 结果提示用）。
+        var label: String {
+            switch self {
+            case .floatingLayer: return "激活选中的浮动图层"
+            case .selection: return "框选区域"
+            case .wholeImage: return "整张图片"
+            }
+        }
+    }
+
+    /// 提取源的选择规则 —— 优先级：**激活选中的浮动图层 → 橡皮筋选区 → 整张图**。
+    ///
+    /// 单独抽成纯函数是为了能离屏验证：真跑一遍"选中浮动图层"要造鼠标事件，
+    /// 而这条优先级本身就是最容易改错的地方（用户明确要求"有浮动块被选中时
+    /// 只认那一块，不含它下面那一层"）。`ExtractionScopeCheck` 会遍历四种组合。
+    static func extractionScope(floatingLayerSelected: Bool, rubberBandActive: Bool) -> ExtractionScope {
+        if floatingLayerSelected { return .floatingLayer }
+        if rubberBandActive { return .selection }
+        return .wholeImage
+    }
+
+    /// 当前激活选中的浮动图层 —— 只有带自己像素的粘贴 / 抠图图层算数
+    /// （形状、文字、序号是画上去的标注，没有独立像素）。
+    private var selectedFloatingLayer: Annotation? {
+        guard let ann = selectedAnnotation, case .pastedImage = ann.kind else { return nil }
+        return ann
+    }
+
+    /// 当前生效的提取范围。
+    var currentExtractionScope: ExtractionScope {
+        Self.extractionScope(floatingLayerSelected: selectedFloatingLayer != nil,
+                             rubberBandActive: selectionRect.width > 2 && selectionRect.height > 2)
+    }
+
+    /// 提取内容（OCR）要识别的图。
+    ///
+    /// 浮动图层走它自己的像素，透明底先垫成白底 —— 直接把透明 PNG 丢给识别模型，
+    /// 透明区常被判成黑色块，文字就糊了。
+    func contentExtractionImage() -> (image: CGImage, scope: ExtractionScope)? {
+        guard let tab else { return nil }
+
+        switch currentExtractionScope {
+        case .floatingLayer:
+            guard let ann = selectedFloatingLayer,
+                  case .pastedImage(_, _, let layerImage) = ann.kind else { return nil }
+            return (Self.flattenedOnWhite(layerImage) ?? layerImage, .floatingLayer)
+
+        case .selection:
+            guard let region = tab.renderRegion(selectionRect) else { return nil }
+            return (region, .selection)
+
+        case .wholeImage:
+            guard let full = tab.renderComposite() else { return nil }
+            return (full, .wholeImage)
+        }
+    }
+
+    /// 抠图要上送的图 + 其中的目标区域 + **这张图左上角在画布坐标里的位置**。
+    ///
+    /// 与 OCR 的取图策略不同：抠图需要选区周围一圈上下文帮模型认清主体边缘，
+    /// 所以框选时上送整张合成图 + 选区坐标；只有"选中的浮动图层"这一种情况
+    /// 上送图层自身像素 —— 它本来就只有自己那一块，下面是别的层。
+    /// 返回的 `anchor` 供结果落图层时把坐标平移回画布（否则会落到画布左上角）。
+    func subjectExtractionPatch() -> (patch: CGImage, region: CGRect, anchor: CGPoint, scope: ExtractionScope)? {
+        guard let tab else { return nil }
+
+        switch currentExtractionScope {
+        case .floatingLayer:
+            guard let ann = selectedFloatingLayer,
+                  case .pastedImage(let origin, let size, let layerImage) = ann.kind else { return nil }
+            return (layerImage,
+                    CGRect(x: 0, y: 0, width: size.width, height: size.height),
+                    origin,
+                    .floatingLayer)
+
+        case .selection:
+            guard let full = tab.renderComposite() else { return nil }
+            return (full, selectionRect, .zero, .selection)
+
+        case .wholeImage:
+            // 整图没有"要抠的主体"可言 —— 交给调用方提示用户先框选。
+            return nil
+        }
+    }
+
+    /// 抠图的目标区域（画布坐标）。没有任何可抠目标时返回 nil —— 调用方据此弹提示。
+    /// 优先级与 `subjectExtractionPatch()` 一致：选中的浮动图层优先于橡皮筋选区。
     func subjectRegion() -> CGRect? {
+        if let ann = selectedFloatingLayer { return ann.boundingBox }
         if selectionRect.width >= 2, selectionRect.height >= 2 { return selectionRect }
-        if let ann = selectedAnnotation, case .pastedImage = ann.kind { return ann.boundingBox }
         return nil
+    }
+
+    /// 把带 alpha 的图垫到白底上，得到不透明图。
+    static func flattenedOnWhite(_ image: CGImage) -> CGImage? {
+        let w = image.width
+        let h = image.height
+        guard w > 0, h > 0,
+              let ctx = CGContext(
+                  data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else { return nil }
+        ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        return ctx.makeImage()
     }
 
     /// 提取矢量图：把选区（或选中的浮动图层）交给火山引擎抠图，结果**落成透明底浮动图层**。
@@ -1130,11 +1241,7 @@ final class CanvasView: NSView {
         onStage: @escaping (String) -> Void,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let targetTab = tab, let patch = targetTab.renderComposite() else {
-            completion(.failure(MediaKitClient.Error.encodeFailed))
-            return
-        }
-        guard let region = subjectRegion() else {
+        guard let targetTab = tab, let source = subjectExtractionPatch() else {
             completion(.failure(VolcMattingService.MattingError.noSelection))
             return
         }
@@ -1143,10 +1250,12 @@ final class CanvasView: NSView {
             DispatchQueue.main.async { onStage(stage.rawValue) }
         }
 
+        let canvasSize = targetTab.pixelSize
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let subject = try VolcMattingService.extractSubject(
-                    in: patch, region: region, apiKey: apiKey,
+                    in: source.patch, region: source.region, anchor: source.anchor,
+                    canvasSize: canvasSize, apiKey: apiKey,
                     cancel: cancel, onStage: reportStage
                 )
                 DispatchQueue.main.async {

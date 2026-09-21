@@ -107,8 +107,8 @@ settings sheet writes the key back.
    - **Apple Silicon (M series)**: `截图大师SnipMagic-v3.3.0.dmg` (arm64)
    - **Intel Mac**: `截图大师SnipMagic-v3.3.0-x86_64.dmg` (x86_64)
 2. Open the dmg and drag **截图大师SnipMagic** into `Applications`.
-3. **First launch**: the build is ad-hoc signed, so right-click the app in `Applications` →
-   **Open** → **Open** again to get past Gatekeeper.
+3. **First launch**: the app is self-signed, so right-click it in `Applications` → **Open** →
+   **Open** again to get past Gatekeeper.
 4. Grant **Screen Recording** permission when asked (restart the app afterwards for the
    permission to take effect).
 

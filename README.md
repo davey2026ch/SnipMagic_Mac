@@ -284,7 +284,7 @@
 git clone https://gitee.com/mrpu2020/SnipMagic_Mac.git
 cd SnipMagic_Mac
 
-# 首次构建前：创建固定的代码签名证书（只需执行一次，详见下方「签名说明」）
+# 首次构建前：创建固定的代码签名证书（只需执行一次）
 ./create_signing_cert.sh
 
 # 编译运行（Swift Package Manager）
@@ -302,8 +302,6 @@ swift run ScreenshotTool
 ```
 
 > `--disable-sandbox` 是 SwiftPM 在受限环境下构建的必要参数。
->
-> **签名说明**：`build_app.sh` 优先用固定自签证书 `ScreenshotTool Self-Signed` 签名（由 `./create_signing_cert.sh` 生成）。这不是为了绕过 Gatekeeper（自签证书仍会被拦，首次打开需右键 → 打开），而是为了**自动更新后系统授权不失效**：macOS 的屏幕录制等权限按「代码签名要求（designated requirement）」记录，ad-hoc 签名（`codesign --sign -`）的要求绑在 cdhash 上、每次构建都会变，于是更新一次就要重新授权一次；固定证书的要求是 `identifier X and certificate root = H<指纹>`，只绑证书不看内容。证书不存在时脚本会自动退回 ad-hoc 并给出提示。
 >
 > **多架构说明**：本机为 Apple Silicon 时，脚本用 `swift build --triple x86_64-apple-macosx14.0.0` 交叉编译 Intel 版本，无需 Intel 机器。Swift 6.4 的 swift build 不支持 `--arch`，必须用 `--triple`；triple 版本号要跟 `Package.swift` 的 `platforms: [.macOS(.v14)]` 对齐。
 >

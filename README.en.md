@@ -19,6 +19,15 @@ English | [简体中文](README.md)
 - **Compare two images**: drag a tab onto the right half (or use the tab context menu) to
   show two images side by side, with synchronised scrolling on by default.
 - **Theme**: dark / light / follow system, chosen in Settings.
+- **One-click tools, double-click to lock**: the active tool is highlighted; after a single
+  use the editor returns to **Select** (框选) automatically, so you never have to click back.
+  Double-click a shape tool and a small **padlock** appears in its corner — it then stays
+  active so you can draw several shapes in a row (like a locked Format Painter in Office).
+  Click it once more to unlock.
+- **Extract graphic (AI cut-out)**: frame a subject (icon, person, product, …) and let the
+  cloud model remove its background. The subject lands back on the canvas as a
+  **transparent floating layer** — drag it, resize it, and `⌘C` it into WeChat / Keynote /
+  Word with real alpha preserved.
 - **OCR / content extraction**: text + tables (and images on some pages), exported to
   Markdown, Word or Excel.
 

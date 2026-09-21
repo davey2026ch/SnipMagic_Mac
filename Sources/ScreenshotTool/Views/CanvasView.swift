@@ -1062,7 +1062,7 @@ final class CanvasView: NSView {
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         guard let targetTab = tab, let patch = targetTab.renderComposite() else {
-            completion(.failure(VolcEraseService.EraseError.encodeFailed))
+            completion(.failure(MediaKitClient.Error.encodeFailed))
             return
         }
 
@@ -1091,7 +1091,7 @@ final class CanvasView: NSView {
                 DispatchQueue.main.async {
                     // 云端往返期间用户可能换了页签，别把结果贴到别人身上。
                     guard let self, let liveTab = self.tab, liveTab === targetTab else {
-                        completion(.failure(VolcEraseService.EraseError.encodeFailed))
+                        completion(.failure(MediaKitClient.Error.encodeFailed))
                         return
                     }
                     self.onWillMutate?()
@@ -1104,6 +1104,123 @@ final class CanvasView: NSView {
                 DispatchQueue.main.async { completion(.failure(error)) }
             }
         }
+    }
+
+    // MARK: - 提取矢量图（火山引擎 AI MediaKit 云端抠图）
+
+    /// 抠图的目标区域：橡皮筋选区优先；没有选区时，退而取选中的浮动图层包围盒
+    /// ——「选中一块浮动图层再抠」和「框一块再抠」是同一件事的两种手势。
+    func subjectRegion() -> CGRect? {
+        if selectionRect.width >= 2, selectionRect.height >= 2 { return selectionRect }
+        if let ann = selectedAnnotation, case .pastedImage = ann.kind { return ann.boundingBox }
+        return nil
+    }
+
+    /// 提取矢量图：把选区（或选中的浮动图层）交给火山引擎抠图，结果**落成透明底浮动图层**。
+    ///
+    /// 与马赛克 / 魔法消除不同 —— 它不改底图像素，而是新增一个可拖动、可缩放的图层，
+    /// 落图层前压一次撤销快照（一步撤销即可移除）。
+    ///
+    /// - Parameters:
+    ///   - cancel: UI 点「取消」时掐掉正在跑的请求。
+    ///   - onStage: 阶段文案，已切回主线程。
+    func extractSubjectFromSelection(
+        apiKey: String,
+        cancel: MediaKitClient.CancelToken,
+        onStage: @escaping (String) -> Void,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        guard let targetTab = tab, let patch = targetTab.renderComposite() else {
+            completion(.failure(MediaKitClient.Error.encodeFailed))
+            return
+        }
+        guard let region = subjectRegion() else {
+            completion(.failure(VolcMattingService.MattingError.noSelection))
+            return
+        }
+
+        let reportStage: (VolcMattingService.Stage) -> Void = { stage in
+            DispatchQueue.main.async { onStage(stage.rawValue) }
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let subject = try VolcMattingService.extractSubject(
+                    in: patch, region: region, apiKey: apiKey,
+                    cancel: cancel, onStage: reportStage
+                )
+                DispatchQueue.main.async {
+                    // 云端往返期间用户可能换了页签，别把结果贴到别人身上。
+                    guard let self, let liveTab = self.tab, liveTab === targetTab else {
+                        completion(.failure(VolcMattingService.MattingError.targetChanged))
+                        return
+                    }
+                    // 新图层是一步可撤销的操作，落笔前先压快照。
+                    self.onWillMutate?()
+                    let ann = Annotation(
+                        kind: .pastedImage(origin: subject.origin,
+                                           size: subject.size,
+                                           image: subject.image),
+                        color: self.style.color,
+                        lineWidth: self.style.lineWidth
+                    )
+                    liveTab.annotations.append(ann)
+                    liveTab.markUnsaved()
+                    self.clearSelection()
+                    self.selectedAnnotation = ann
+                    self.onAnnotationsChanged?()
+                    self.needsDisplay = true
+                    // 新图层要能立刻拖动 / 缩放，所以停在「框选」工具上。
+                    self.onRequestToolSwitch?(.select)
+                    let label = VolcMattingService.sceneLabel(subject.scene)
+                    completion(.success(
+                        "已抠出主体（\(label)场景）\(Int(subject.size.width)) × \(Int(subject.size.height)) 像素，已选中并\(Self.placementText(subject.offset))，可拖动 / 缩放"
+                    ))
+                }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+
+    // MARK: - 查看模式：把编辑「定版」
+
+    /// 「查看」模式下把画布上的编辑一次性定版：所有浮动元素（粘贴 / 抠出来的图层、
+    /// 形状、画笔、文本、序号、马赛克）烙进底图，`annotations` 随之清空 ——
+    /// 之后画布上就是"成品"，没有可再拖动 / 缩放的东西了。
+    ///
+    /// **顺序很重要**：先把当前的撤销快照压进去，再烘焙。这样"定版"本身也是一步操作，
+    /// `⌘Z` 能把整套浮动元素原样还回来（不然定版就成了不可逆的破坏性动作）。
+    ///
+    /// - Returns: 真的定了版才返回 true（没有浮动元素时什么都不做，
+    ///   免得往撤销栈里塞一个空快照）。
+    @discardableResult
+    func flattenEditsForViewMode() -> Bool {
+        guard let tab, !tab.annotations.isEmpty, let flattened = tab.renderComposite() else {
+            return false
+        }
+        onWillMutate?()          // 定版前的快照 —— 必须早于改 baseImage
+        tab.baseImage = flattened
+        tab.annotations.removeAll()
+        selectedAnnotation = nil
+        clearSelection()
+        tab.markUnsaved()
+        onAnnotationsChanged?()
+        needsDisplay = true
+        return true
+    }
+
+    /// 把"错开多少"翻译成一句人话（状态栏反馈用）。
+    private static func placementText(_ offset: CGPoint) -> String {
+        let dx = Int(offset.x.rounded())
+        let dy = Int(offset.y.rounded())
+        guard dx != 0 || dy != 0 else { return "原地摆放（主体比画布还大）" }
+        var direction = ""
+        direction += dy < 0 ? "上" : (dy > 0 ? "下" : "")
+        direction += dx < 0 ? "左" : (dx > 0 ? "右" : "")
+        let amount = dx == 0 || dy == 0 ? "\(max(abs(dx), abs(dy)))" : "\(abs(dx)) × \(abs(dy))"
+        return "往\(direction)错开 \(amount) 像素摆放"
     }
 
     /// 直接改像素的操作（马赛克 / 魔法消除）收尾动作一致：落盘标记 + 收选区 + 重绘。

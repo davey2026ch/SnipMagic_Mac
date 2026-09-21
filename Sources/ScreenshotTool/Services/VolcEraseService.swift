@@ -7,11 +7,8 @@ import Foundation
 /// 纹理和结构重建出来（渐变、丝线、字母轮廓都能还原），代价是图片会上传到
 /// 火山引擎、需要 API Key、且依赖网络。
 ///
-/// 本地图片没有公网地址，所以链路是三步：
-///   1. `POST /tools-sync/request-media-upload-url` —— 申请 `file_id` 和带签名的上传地址
-///   2. `PUT {upload_url}` —— 纯二进制上传（**不能用 multipart**）
-///   3. `POST /tools-sync/erase-image` —— 用 `mediakit://{file_id}` 引用，拿回结果地址
-///   4. 下载结果
+/// HTTP 链路（预签名上传 → 工具接口 → 取回结果）都在 `MediaKitClient` 里，
+/// 与「提取矢量图」共用一份；这里只管擦除业务本身。
 ///
 /// 踩过的两个坑，别改回去：
 /// - **遮罩图必须是三通道 RGB**。单通道灰度 PNG 会让服务端直接 500
@@ -46,45 +43,15 @@ enum VolcEraseService {
         case downloading = "正在取回结果…"
     }
 
+    /// 「魔法消除」自己的前置校验错误（选区类）。
+    /// 链路错误统一用 `MediaKitClient.Error`。
     enum EraseError: LocalizedError {
-        case missingAPIKey
         case noSelection
-        case encodeFailed
-        case uploadSlotFailed(String)
-        case uploadRejected(Int, String)
-        case tooLarge(Int)
-        case serviceFailed(code: String, message: String)
-        case malformedResponse
-        case downloadFailed(String)
-        case network(String)
 
         var errorDescription: String? {
-            switch self {
-            case .missingAPIKey:
-                return "还没配置火山引擎 API Key。请到「设置」→「火山 API Key」填入后再试。"
-            case .noSelection:
-                return "请先框选区域，或用刷子涂出要擦掉的范围。"
-            case .encodeFailed:
-                return "图片编码失败。"
-            case .uploadSlotFailed(let detail):
-                return "申请上传地址失败：\(detail)"
-            case .uploadRejected(let status, let detail):
-                return "上传被拒绝（HTTP \(status)）：\(detail)"
-            case .tooLarge(let bytes):
-                return "图片超过 10MB 上限（当前 \(bytes / 1024 / 1024)MB）。请缩小选区后重试。"
-            case .serviceFailed(let code, let message):
-                return "云端处理失败（\(code)）：\(message)"
-            case .malformedResponse:
-                return "云端返回的数据无法解析。"
-            case .downloadFailed(let detail):
-                return "结果下载失败：\(detail)"
-            case .network(let detail):
-                return "网络异常：\(detail)"
-            }
+            "请先框选区域，或用刷子涂出要擦掉的范围。"
         }
     }
-
-    private static let baseURL = URL(string: "https://mediakit.cn-beijing.volces.com/api/v1")!
 
     // MARK: - 对外接口
 
@@ -99,10 +66,10 @@ enum VolcEraseService {
         options: Options = .default,
         onStage: ((Stage) -> Void)? = nil
     ) throws -> CGImage {
-        let plan = try prepare(image: image, area: region, apiKey: apiKey, options: options)
+        let plan = try prepare(image: image, area: region, options: options)
         return try run(
             image: image, plan: plan, apiKey: apiKey, options: options,
-            maskSource: nil, scopeRect: region, onStage: onStage
+            maskSource: nil, onStage: onStage
         )
     }
 
@@ -114,14 +81,14 @@ enum VolcEraseService {
         options: Options = .default,
         onStage: ((Stage) -> Void)? = nil
     ) throws -> CGImage {
-        guard mask.count == image.width * image.height else { throw EraseError.encodeFailed }
+        guard mask.count == image.width * image.height else { throw MediaKitClient.Error.encodeFailed }
         guard let area = maskBounds(mask, width: image.width, height: image.height) else {
-            throw EraseError.encodeFailed
+            throw MediaKitClient.Error.encodeFailed
         }
-        let plan = try prepare(image: image, area: area, apiKey: apiKey, options: options)
+        let plan = try prepare(image: image, area: area, options: options)
         return try run(
             image: image, plan: plan, apiKey: apiKey, options: options,
-            maskSource: mask, scopeRect: nil, onStage: onStage
+            maskSource: mask, onStage: onStage
         )
     }
 
@@ -143,16 +110,14 @@ enum VolcEraseService {
         var height: Int
     }
 
-    private static func prepare(image: CGImage, area: CGRect, apiKey: String, options: Options) throws -> Plan {
-        guard !apiKey.isEmpty else { throw EraseError.missingAPIKey }
-
+    private static func prepare(image: CGImage, area: CGRect, options: Options) throws -> Plan {
         let imageBounds = CGRect(x: 0, y: 0, width: CGFloat(image.width), height: CGFloat(image.height))
         let margin = CGFloat(options.context)
         let scope = area.integral
             .insetBy(dx: -margin, dy: -margin)
             .integral
             .intersection(imageBounds)
-        guard scope.width >= 4, scope.height >= 4 else { throw EraseError.encodeFailed }
+        guard scope.width >= 4, scope.height >= 4 else { throw MediaKitClient.Error.encodeFailed }
 
         // 归一化是相对「上传出去的那张局部图」而言的，必须先减去 scope 原点，
         // 否则算出来的比例会大于 1（服务端会直接拒绝）。
@@ -172,14 +137,15 @@ enum VolcEraseService {
         apiKey: String,
         options: Options,
         maskSource: [UInt8]?,
-        scopeRect: CGRect?,
         onStage: ((Stage) -> Void)?
     ) throws -> CGImage {
+        try MediaKitClient.requireKey(apiKey)
+
         // 局部裁剪，并按服务端分辨率上限等比缩放
-        guard let patch = image.cropping(to: plan.scope) else { throw EraseError.encodeFailed }
+        guard let patch = image.cropping(to: plan.scope) else { throw MediaKitClient.Error.encodeFailed }
         let scale = min(1.0, min(options.maxWidth / CGFloat(patch.width),
                                  options.maxHeight / CGFloat(patch.height)))
-        let working = try scaled(patch, by: scale)
+        let working = try MediaKitClient.scaled(patch, by: scale)
 
         // 遮罩模式下，把整图遮罩裁成局部并同步缩放
         var localMask: MaskBitmap?
@@ -194,156 +160,56 @@ enum VolcEraseService {
 
         // ① 上传原图局部
         onStage?(.uploadingImage)
-        guard let imagePNG = encodePNG(working) else { throw EraseError.encodeFailed }
-        try checkSize(imagePNG.count, limit: options.maxBytes)
-        let imageID = try upload(imagePNG, contentType: "image/png",
-                                 apiKey: apiKey, timeout: options.timeout)
+        guard let imagePNG = MediaKitClient.encodePNG(working) else {
+            throw MediaKitClient.Error.encodeFailed
+        }
+        try MediaKitClient.checkSize(imagePNG.count, limit: options.maxBytes)
+        let imageRef = try MediaKitClient.upload(imagePNG, apiKey: apiKey, timeout: options.timeout)
 
         // ② 上传遮罩（如果有）
-        var maskID: String?
+        var maskRef: String?
         if let localMask {
             onStage?(.uploadingMask)
-            guard let maskPNG = encodeMaskPNG(localMask) else { throw EraseError.encodeFailed }
-            try checkSize(maskPNG.count, limit: options.maxBytes)
-            maskID = try upload(maskPNG, contentType: "image/png",
-                                apiKey: apiKey, timeout: options.timeout)
+            guard let maskPNG = encodeMaskPNG(localMask) else {
+                throw MediaKitClient.Error.encodeFailed
+            }
+            try MediaKitClient.checkSize(maskPNG.count, limit: options.maxBytes)
+            maskRef = try MediaKitClient.upload(maskPNG, apiKey: apiKey, timeout: options.timeout)
         }
 
         // ③ 提交擦除任务
         onStage?(.erasing)
         var body: [String: Any] = [
-            "image_url": imageID,
+            "image_url": imageRef,
             "standard_scene": "selected_area_erase",
             "output_format": options.outputFormat,
         ]
-        if let maskID {
-            body["mask_url"] = maskID
+        if let maskRef {
+            body["mask_url"] = maskRef
         } else if let normalized = plan.normalizedArea {
             body["selected_area"] = normalized
         }
 
-        let response = try postJSON(path: "/tools-sync/erase-image", body: body,
-                                    apiKey: apiKey, timeout: options.timeout)
-        try verify(response)
+        let response = try MediaKitClient.postJSON(path: "/tools-sync/erase-image", body: body,
+                                                   apiKey: apiKey, timeout: options.timeout)
+        try MediaKitClient.verify(response)
 
         guard let result = response["result"] as? [String: Any],
-              let urlString = result["image_url"] as? String,
-              let resultURL = URL(string: urlString) else { throw EraseError.malformedResponse }
+              let urlString = result["image_url"] as? String else {
+            throw MediaKitClient.Error.malformedResponse
+        }
 
         // ④ 取回结果
         onStage?(.downloading)
-        let (data, status) = try send(URLRequest(url: resultURL), timeout: options.timeout)
-        guard (200..<300).contains(status), !data.isEmpty else {
-            throw EraseError.downloadFailed("HTTP \(status)")
-        }
-        guard let resultImage = decodeImage(data) else { throw EraseError.malformedResponse }
+        let resultImage = try MediaKitClient.download(imageURL: urlString, timeout: options.timeout)
 
         // ⑤ 缩放回局部尺寸 → 贴回原图原位
-        let restored = try scaled(resultImage, toWidth: Int(plan.scope.width),
-                                  height: Int(plan.scope.height))
+        let restored = try MediaKitClient.scaled(resultImage, toWidth: Int(plan.scope.width),
+                                                 height: Int(plan.scope.height))
         return try compose(base: image, patch: restored, at: plan.scope)
     }
 
-    // MARK: - HTTP
-
-    private static func checkSize(_ bytes: Int, limit: Int) throws {
-        if bytes > limit { throw EraseError.tooLarge(bytes) }
-    }
-
-    /// 申请上传地址 → PUT 二进制 → 返回 `mediakit://…` 引用。
-    private static func upload(
-        _ data: Data,
-        contentType: String,
-        apiKey: String,
-        timeout: TimeInterval
-    ) throws -> String {
-        let slot = try postJSON(path: "/tools-sync/request-media-upload-url",
-                                body: [:], apiKey: apiKey, timeout: timeout)
-        guard let result = slot["result"] as? [String: Any],
-              let fileID = result["file_id"] as? String,
-              let uploadURL = result["upload_url"] as? String,
-              let url = URL(string: uploadURL) else {
-            throw EraseError.uploadSlotFailed(String(describing: slot).prefix(200).description)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        request.httpBody = data
-
-        let (body, status) = try send(request, timeout: timeout)
-        guard (200..<300).contains(status) else {
-            throw EraseError.uploadRejected(status, String(data: body, encoding: .utf8) ?? "")
-        }
-        return fileID
-    }
-
-    private static func postJSON(
-        path: String,
-        body: [String: Any],
-        apiKey: String,
-        timeout: TimeInterval
-    ) throws -> [String: Any] {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, _) = try send(request, timeout: timeout)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw EraseError.malformedResponse
-        }
-        // 业务失败也走 HTTP 200 之外的形态，这里统一交给 verify 判断，所以先原样返回
-        return json
-    }
-
-    /// 检查响应中的 `success` 字段，失败则抛出服务端给的错误详情。
-    private static func verify(_ response: [String: Any]) throws {
-        if response["success"] as? Bool == true { return }
-        let error = response["error"] as? [String: Any]
-        throw EraseError.serviceFailed(
-            code: error?["code"] as? String ?? "Unknown",
-            message: error?["message"] as? String ?? "未提供详情"
-        )
-    }
-
-    /// 同步发一个请求。只能在后台线程调用。
-    private static func send(_ request: URLRequest, timeout: TimeInterval) throws -> (Data, Int) {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
-        let session = URLSession(configuration: configuration)
-        defer { session.finishTasksAndInvalidate() }
-
-        let box = ResponseBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        session.dataTask(with: request) { data, response, error in
-            box.data = data
-            box.status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            box.error = error
-            semaphore.signal()
-        }.resume()
-
-        if semaphore.wait(timeout: .now() + timeout + 5) == .timedOut {
-            throw EraseError.network("请求超时")
-        }
-        if let error = box.error { throw EraseError.network(error.localizedDescription) }
-        return (box.data ?? Data(), box.status)
-    }
-
-    private final class ResponseBox {
-        var data: Data?
-        var status = 0
-        var error: Error?
-    }
-
-    // MARK: - 位图工具
-
-    private static func encodePNG(_ image: CGImage) -> Data? {
-        let rep = NSBitmapImageRep(cgImage: image)
-        return rep.representation(using: .png, properties: [:])
-    }
+    // MARK: - 遮罩工具
 
     /// 编码遮罩 PNG。**必须三通道 RGB**，单通道灰度会被服务端拒绝。
     private static func encodeMaskPNG(_ mask: MaskBitmap) -> Data? {
@@ -362,11 +228,6 @@ enum VolcEraseService {
             destination[index * 3 + 2] = value
         }
         return rep.representation(using: .png, properties: [:])
-    }
-
-    private static func decodeImage(_ data: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }
 
     /// 从 RGBA 位图里裁出局部遮罩。
@@ -416,26 +277,6 @@ enum VolcEraseService {
         return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
     }
 
-    private static func scaled(_ image: CGImage, by factor: CGFloat) throws -> CGImage {
-        guard factor < 0.999 else { return image }
-        return try scaled(image,
-                          toWidth: max(10, Int((CGFloat(image.width) * factor).rounded())),
-                          height: max(10, Int((CGFloat(image.height) * factor).rounded())))
-    }
-
-    private static func scaled(_ image: CGImage, toWidth: Int, height: Int) throws -> CGImage {
-        guard let context = CGContext(
-            data: nil, width: toWidth, height: height,
-            bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { throw EraseError.encodeFailed }
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: toWidth, height: height))
-        guard let output = context.makeImage() else { throw EraseError.encodeFailed }
-        return output
-    }
-
     /// 把处理好的局部贴回原图。矩形坐标是左上原点，这里转成 CG 的下原点。
     private static func compose(base: CGImage, patch: CGImage, at rect: CGRect) throws -> CGImage {
         let width = base.width
@@ -445,7 +286,7 @@ enum VolcEraseService {
             bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { throw EraseError.encodeFailed }
+        ) else { throw MediaKitClient.Error.encodeFailed }
 
         context.draw(base, in: CGRect(x: 0, y: 0, width: width, height: height))
         context.interpolationQuality = .high
@@ -455,7 +296,7 @@ enum VolcEraseService {
             width: rect.width,
             height: rect.height
         ))
-        guard let output = context.makeImage() else { throw EraseError.encodeFailed }
+        guard let output = context.makeImage() else { throw MediaKitClient.Error.encodeFailed }
         return output
     }
 }

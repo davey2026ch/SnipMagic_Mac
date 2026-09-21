@@ -53,17 +53,24 @@ final class EditorViewController: NSViewController {
     /// 防重入：applyThemeColors 内部会重建页签，可能再次触发 appearance 回调。
     private var isApplyingTheme = false
 
-    private var sidebarButtons: [NSButton] = []
-    private var toolButtons: [ToolKind: NSButton] = [:]
+    private var toolButtons: [ToolKind: ToolButton] = [:]
+    /// 被「锁定」的工具（右下角带小锁）：双击锁定后连续绘制，不必每笔点一次按钮。
+    private var lockedTools: Set<ToolKind> = []
     private var keyMonitor: Any?
     private var extractContentBtn = NSButton()
     private var magicEraseBtn = NSButton()
+    private var extractVectorBtn = NSButton()
     private var isOCRRunning = false
     private var isMagicErasing = false
+    private var isExtractingSubject = false
+    /// 「提取矢量图」正在跑的请求，点「取消」时用它掐掉。
+    private var mattingCancel: MediaKitClient.CancelToken?
     /// 耗时操作的浮层：转圈的 spinner + 可随时改的副标题。
     private var busyPanel: NSPanel?
     private var busySpinner: NSProgressIndicator?
     private var busyStageLabel: NSTextField?
+    /// 浮层上「取消」按钮的动作，没有就说明这个操作不可取消（按钮不显示）。
+    private var busyCancelHandler: (() -> Void)?
     private var ocrProgressIndicator: NSProgressIndicator?
     private var ocrProgressPanel: NSPanel?
     private var ocrStageLabel: NSTextField?
@@ -138,6 +145,7 @@ final class EditorViewController: NSViewController {
         compareHint.layer?.backgroundColor = Theme.accent.withAlphaComponent(0.12).cgColor
         compareHint.layer?.borderColor = Theme.accent.withAlphaComponent(0.55).cgColor
         rebuildTabs()   // 页签 chip 的底色也需要按新主题重取
+        refreshToolButtons()   // 侧栏激活态是自绘蓝底，同样要按新主题重取
         canvas.needsDisplay = true
         view.needsDisplay = true
     }
@@ -242,7 +250,13 @@ final class EditorViewController: NSViewController {
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
         magicEraseBtn = makeToolButton("🪄 魔法消除", action: #selector(magicEraseClicked))
-        magicEraseBtn.toolTip = "用「擦除刷」刷出要抹掉的部分，或直接用「选择」框一块，再点这里：由火山引擎的图像修复模型重建背景（纹理还原好，图片会上传到火山引擎）"
+        magicEraseBtn.toolTip = "用「擦除刷」刷出要抹掉的部分，或直接用「框选」框一块，再点这里：由火山引擎的图像修复模型重建背景（纹理还原好，图片会上传到火山引擎）"
+        extractVectorBtn = makeToolButton("提取矢量图", icon: "seal.fill", action: #selector(extractVectorClicked))
+        extractVectorBtn.toolTip = """
+        框选主体（或用「框选」点中一个浮动图层）后点这里：由火山引擎抠图，把主体从背景里抠出来，
+        落成一个透明底图层放回画布 —— 可拖动、可缩放，⌘C 复制到微信 / Keynote / Word 也保留透明。
+        图片会上传到火山引擎；选区别贴太紧，留一圈背景更好认。
+        """
         extractContentBtn = makeToolButton("📋 提取内容", action: #selector(extractContentClicked))
         extractContentBtn.toolTip = "OCR 识别当前页签图片中的文字/表格（有选区则只识别选区），结果以 Markdown 返回并自动复制"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
@@ -251,7 +265,7 @@ final class EditorViewController: NSViewController {
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
-        for b in [captureBtn, longCaptureBtn, mosaicBtn, magicEraseBtn, extractContentBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, longCaptureBtn, mosaicBtn, magicEraseBtn, extractVectorBtn, extractContentBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
 
@@ -324,36 +338,14 @@ final class EditorViewController: NSViewController {
             .number
         ]
         for tool in tools {
-            let btn = NSButton(title: "", target: self, action: #selector(toolClicked(_:)))
-            btn.setButtonType(.toggle)
-            btn.bezelStyle = .smallSquare
-            btn.isBordered = true
-            btn.imagePosition = .imageOnly
-            // Text tool always shows a bold "T" so users recognize it as text.
-            if tool == .text {
-                btn.title = "T"
-                btn.font = .systemFont(ofSize: 15, weight: .bold)
-                btn.imagePosition = .noImage
-            } else if let img = NSImage(systemSymbolName: tool.systemImage, accessibilityDescription: tool.displayName)?
-                .withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) {
-                btn.image = img
-            } else {
-                btn.title = tool.shortLabel
-                btn.font = .systemFont(ofSize: 9, weight: .medium)
-                btn.imagePosition = .noImage
-            }
-            btn.toolTip = tool.displayName
-            btn.identifier = NSUserInterfaceItemIdentifier(tool.rawValue)
+            let btn = ToolButton(tool: tool, target: self, action: #selector(toolClicked(_:)))
             btn.translatesAutoresizingMaskIntoConstraints = false
             btn.widthAnchor.constraint(equalToConstant: 36).isActive = true
             btn.heightAnchor.constraint(equalToConstant: 32).isActive = true
-            if tool == .select {
-                btn.state = .on
-            }
             sideStack.addArrangedSubview(btn)
-            sidebarButtons.append(btn)
             toolButtons[tool] = btn
         }
+        refreshToolButtons()
         refreshEraseBrushToolTip()
 
         // Color swatch at the very bottom of the tool sidebar, under the
@@ -730,10 +722,20 @@ final class EditorViewController: NSViewController {
         stack.addArrangedSubview(hintLabel)
     }
 
-    private func makeToolButton(_ title: String, action: Selector) -> NSButton {
+    /// 工具栏的次要按钮。大多数用 emoji 当图标（写在标题里）；
+    /// 需要"正经"图标时传 SF Symbol 名 —— 注意 macOS 里没有 `stamp` 这个符号，
+    /// 形状最接近「小印章」的是 `seal.fill`（UI 上用过，别改成不存在的名字）。
+    private func makeToolButton(_ title: String, icon: String? = nil, action: Selector) -> NSButton {
         let b = NSButton(title: title, target: self, action: action)
         b.bezelStyle = .rounded
         b.font = .systemFont(ofSize: 13)
+        if let icon,
+           let image = NSImage(systemSymbolName: icon, accessibilityDescription: title)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) {
+            b.image = image
+            b.imagePosition = .imageLeading
+            b.imageHugsTitle = true
+        }
         return b
     }
 
@@ -770,8 +772,12 @@ final class EditorViewController: NSViewController {
             self?.refreshStatus(selection: rect)
         }
         canvas.onRequestToolSwitch = { [weak self] tool in
+            guard let self else { return }
+            // 画完一笔，画布请求退回「框选」；但工具要是被锁定了就别退
+            // —— 那正是"连着画好几个"的意思（Office 里锁定的格式刷一个道理）。
+            if tool == .select, self.isCurrentToolLocked { return }
             // Auto-switch after draw/paste keeps the new object selected.
-            self?.selectedTool(tool, preserveSelection: true)
+            self.selectedTool(tool, preserveSelection: true)
         }
     }
 
@@ -942,9 +948,47 @@ final class EditorViewController: NSViewController {
 
     // MARK: - Tools
 
+    /// 侧栏按钮三种点法，别搞混：
+    /// - **单击可锁定的工具** → 普通激活（画一笔就自动回到「框选」）；
+    /// - **双击可锁定的工具** → 锁定（右下角出现小锁），之后连续绘制不再自动退出；
+    /// - **单击已锁定的工具** → 解除锁定并回到「框选」（明确"取消"语义，也不会误画一笔）。
     @objc private func toolClicked(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue, let tool = ToolKind(rawValue: id) else { return }
+        handleToolClick(tool, clickCount: NSApp.currentEvent?.clickCount ?? 1)
+    }
+
+    /// 点按钮的实际逻辑。与事件对象解耦（`clickCount` 直接传进来），
+    /// 这样离屏验证时不用合成真实双击事件也能测到分支。
+    func handleToolClick(_ tool: ToolKind, clickCount: Int) {
+        if tool.supportsLock {
+            if clickCount >= 2 {
+                lockedTools.insert(tool)
+                selectedTool(tool)
+                flashStatus("已锁定「\(tool.displayName)」：可连续画，单击该按钮解除锁定")
+                return
+            }
+            if lockedTools.contains(tool) {
+                lockedTools.remove(tool)
+                selectedTool(.select)
+                flashStatus("已解除「\(tool.displayName)」锁定")
+                return
+            }
+        }
         selectedTool(tool)
+    }
+
+    /// 当前工具是否处于锁定（连续绘制）状态。
+    private var isCurrentToolLocked: Bool {
+        style.tool.supportsLock && lockedTools.contains(style.tool)
+    }
+
+    /// 把「当前工具 + 锁定状态」同步到侧栏按钮（蓝底激活态 / 右下角小锁）。
+    /// 主题切换后也要重来一次 —— layer 背景色是取值瞬间的快照。
+    private func refreshToolButtons() {
+        for (tool, button) in toolButtons {
+            button.isActiveTool = (tool == style.tool)
+            button.isLocked = lockedTools.contains(tool)
+        }
     }
 
     func selectedTool(_ tool: ToolKind, preserveSelection: Bool = false) {
@@ -953,9 +997,10 @@ final class EditorViewController: NSViewController {
         // 擦除刷不画图形 —— 它刷出「要抹掉的区域」，画布据此切换事件行为。
         canvas.eraseBrushActive = (tool == .eraseBrush)
         refreshEraseBrushToolTip()
-        for (t, btn) in toolButtons {
-            btn.state = (t == tool) ? .on : .off
-        }
+        refreshToolButtons()
+        // 「查看」= 定版：进这个模式就把画布上的浮动元素烙进底图
+        // （先压快照再烘焙，所以 ⌘Z 能把整套浮动元素还回来）。
+        let didFlatten = (tool == .view) ? canvas.flattenEditsForViewMode() : false
         if !preserveSelection {
             canvas.commitSelectedPasteIfAny()
             canvas.clearSelection()
@@ -970,6 +1015,9 @@ final class EditorViewController: NSViewController {
             showNumberMenu(from: btn)
         }
         refreshStatus()
+        if didFlatten {
+            flashStatus("已定版：浮动图层与标注已烙进画面（⌘Z 可退回）")
+        }
     }
 
     private func showNumberMenu(from button: NSButton) {
@@ -990,7 +1038,7 @@ final class EditorViewController: NSViewController {
         guard let value = sender.representedObject as? Int else { return }
         style.numberValue = value
         canvas.style = style
-        toolButtons[.number]?.toolTip = "序号（当前 \(AnnotationRenderer.numberString(value))）"
+        toolButtons[.number]?.toolTip = "序号（当前 \(AnnotationRenderer.numberString(value))）：单击盖一个编号，自动回到「框选」"
         // Keep number tool active after picking a value.
         if style.tool != .number {
             selectedTool(.number, preserveSelection: true)
@@ -1007,7 +1055,7 @@ final class EditorViewController: NSViewController {
             selectedTool(.select, preserveSelection: true)
         }
         if !hadSelection {
-            promptForSelection("用「选择」工具在图上拖一个框，再点「马赛克」打码。")
+            promptForSelection("用「框选」工具在图上拖一个框，再点「马赛克」打码。")
         }
     }
 
@@ -1039,7 +1087,7 @@ final class EditorViewController: NSViewController {
             alert.informativeText = """
             两种方式任选：
             · 用侧栏的「擦除刷」在图上刷出要抹掉的部分（形状自由）
-            · 或者用「选择」工具拖一个矩形框
+            · 或者用「框选」工具拖一个矩形框
             """
             alert.runModal()
             return
@@ -1078,6 +1126,99 @@ final class EditorViewController: NSViewController {
         )
     }
 
+    // MARK: - 提取矢量图（火山引擎 AI MediaKit 云端抠图）
+
+    @objc private func extractVectorClicked() {
+        guard !isExtractingSubject else { return }
+
+        guard currentTab != nil else {
+            let alert = NSAlert()
+            alert.messageText = "还没有截图"
+            alert.informativeText = "先截一张图，框选要抠出的主体，再点「提取矢量图」。"
+            alert.runModal()
+            return
+        }
+
+        let apiKey = MinerUOCRService.loadConfig().volcKey ?? ""
+        guard !apiKey.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "还没配置火山引擎 API Key"
+            alert.informativeText = """
+            「提取矢量图」把抠图交给火山引擎的云端模型，需要先在「设置」里填入 AI MediaKit 的 API Key（在 console.volcengine.com/imp/ai-mediakit/settings 创建）。这把 Key 与「魔法消除」是同一把，填一次即可长期使用。
+            """
+            alert.addButton(withTitle: "去设置")
+            alert.addButton(withTitle: "取消")
+            if alert.runModal() == .alertFirstButtonReturn {
+                showSettingsPanel()
+            }
+            return
+        }
+
+        // 前置校验：没有选区 / 选区太小，都在弹进度浮窗之前拦下来（别让用户白等一场）。
+        guard let region = canvas.subjectRegion() else {
+            let alert = NSAlert()
+            alert.messageText = "请先框选要抠出的主体"
+            alert.informativeText = """
+            两种方式任选：
+            · 用「框选」工具在图上拖一个框，把主体连同一圈背景一起框进来
+            · 或者用「框选」点中一个浮动图层，再点这里
+            """
+            alert.runModal()
+            return
+        }
+        do {
+            try VolcMattingService.validate(region: region)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "选区太小了"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return
+        }
+
+        let cancel = MediaKitClient.CancelToken()
+        mattingCancel = cancel
+        isExtractingSubject = true
+        extractVectorBtn.isEnabled = false
+        showBusyPanel(title: "正在抠出主体…", subtitle: "准备上传选区…") { [weak self] in
+            self?.mattingCancel?.cancel()
+            self?.busyStageLabel?.stringValue = "正在取消…"
+        }
+
+        canvas.extractSubjectFromSelection(
+            apiKey: apiKey,
+            cancel: cancel,
+            onStage: { [weak self] stage in
+                self?.busyStageLabel?.stringValue = stage
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                self.isExtractingSubject = false
+                self.mattingCancel = nil
+                self.extractVectorBtn.isEnabled = true
+                self.hideBusyPanel()
+
+                if self.style.tool != .select {
+                    self.selectedTool(.select, preserveSelection: true)
+                }
+
+                switch result {
+                case .success(let summary):
+                    self.flashStatus("✂️ \(summary)")
+                case .failure(let error):
+                    if let mediaError = error as? MediaKitClient.Error, case .cancelled = mediaError {
+                        self.flashStatus("已取消，未改动图片")
+                        return
+                    }
+                    let alert = NSAlert()
+                    alert.messageText = "提取矢量图失败"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
+            }
+        )
+    }
+
     /// 擦除刷的提示里带上当前笔刷大小，顺手说明怎么调。
     /// 特意强调「涂满」—— 遮罩没盖到的笔画会被云端当成背景留下来。
     private func refreshEraseBrushToolTip() {
@@ -1107,14 +1248,19 @@ final class EditorViewController: NSViewController {
         alert.runModal()
     }
 
-    // MARK: - 耗时操作的浮层（魔法消除走云端时盖住画布）
+    // MARK: - 耗时操作的浮层（魔法消除 / 提取矢量图走云端时盖住画布）
 
     /// 弹一个带转圈的小浮层，返回副标题 label 供随时改阶段文案。
+    /// 传了 `onCancel` 就多一个「取消」按钮 —— 只有能真正掐断链路的操作才给这个按钮。
     @discardableResult
-    private func showBusyPanel(title: String, subtitle: String) -> NSTextField {
+    private func showBusyPanel(
+        title: String,
+        subtitle: String,
+        onCancel: (() -> Void)? = nil
+    ) -> NSTextField {
         hideBusyPanel()
 
-        let size = NSSize(width: 320, height: 132)
+        let size = NSSize(width: 320, height: onCancel == nil ? 132 : 168)
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .fullSizeContentView],
@@ -1166,6 +1312,15 @@ final class EditorViewController: NSViewController {
         stack.addArrangedSubview(stage)
         busyStageLabel = stage
 
+        if let onCancel {
+            busyCancelHandler = onCancel
+            let cancelButton = NSButton(title: "取消", target: self, action: #selector(busyCancelClicked(_:)))
+            cancelButton.bezelStyle = .rounded
+            cancelButton.controlSize = .small
+            cancelButton.toolTip = "中止这次云端处理（不会扣费，也不会改动图片）"
+            stack.addArrangedSubview(cancelButton)
+        }
+
         if let screen = view.window?.screen ?? NSScreen.main {
             let frame = panel.frame
             panel.setFrameOrigin(NSPoint(
@@ -1178,10 +1333,17 @@ final class EditorViewController: NSViewController {
         return stage
     }
 
+    /// 点「取消」后先禁用按钮（避免连点），再交给操作自己的取消动作。
+    @objc private func busyCancelClicked(_ sender: NSButton) {
+        sender.isEnabled = false
+        busyCancelHandler?()
+    }
+
     private func hideBusyPanel() {
         busySpinner?.stopAnimation(nil)
         busySpinner = nil
         busyStageLabel = nil
+        busyCancelHandler = nil
         busyPanel?.orderOut(nil)
         busyPanel = nil
     }

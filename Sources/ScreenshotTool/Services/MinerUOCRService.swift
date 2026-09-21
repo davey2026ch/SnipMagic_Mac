@@ -274,8 +274,8 @@ enum MinerUOCRService {
         agent_timeout=\(Int(config.agentTimeout))
         # 主题：dark=暗色 / light=亮色 / system=跟随系统（默认）；本项缺失或无法识别时按「跟随系统」处理
         theme=\(config.theme.configValue)
-        # 火山引擎 AI MediaKit 的 API Key：「魔法消除」用它做云端擦除与重建，
-        # 在 console.volcengine.com/imp/ai-mediakit/settings 创建；留空则该按钮提示去配置
+        # 火山引擎 AI MediaKit 的 API Key：「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）共用这一把，
+        # 在 console.volcengine.com/imp/ai-mediakit/settings 创建；留空则这两个按钮都会提示去配置
         volc_key=\(config.volcKey ?? "")
 
         """

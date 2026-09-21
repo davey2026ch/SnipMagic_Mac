@@ -20,7 +20,7 @@ enum ToolKind: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .select: return "选择"
+        case .select: return "框选"
         case .eraseBrush: return "擦除刷（刷出要抹掉的区域）"
         case .view: return "查看"
         case .text: return "文本"
@@ -34,6 +34,46 @@ enum ToolKind: String, CaseIterable {
         case .solidRoundedRect: return "实心圆角"
         case .solidEllipse: return "实心椭圆"
         case .number: return "序号"
+        }
+    }
+
+    /// 侧栏的悬浮提示。除了名字，还要说清"点一下之后会发生什么" ——
+    /// 「画一笔就自动退出」和「双击锁定后连续画」这两条规则光看图标猜不出来。
+    var tooltip: String {
+        switch self {
+        case .select:
+            return "框选：在图上拖出一个框（也用于点选、拖动已有标注与浮动图层）"
+        case .view:
+            return "查看：只滚动、缩放；进入时把浮动图层与标注「定版」烙进画面（⌘Z 可退回）"
+        case .eraseBrush:
+            return "擦除刷（刷出要抹掉的区域）"
+        case .text:
+            return "文本：单击放置文本框，输入完成后自动回到「框选」"
+        case .number:
+            return "序号：单击盖一个编号，自动回到「框选」（选中本工具时可改编号值）"
+        default:
+            return "\(displayName)：单击后画一笔，自动回到「框选」；双击本按钮可锁定，锁定后连续画"
+        }
+    }
+
+    /// 一次性工具：在画布上落一个东西之后就"用完即走"，自动退回「框选」。
+    /// 持久模式（框选 / 查看 / 擦除刷）不在此列 —— 它们本身就是"一直待着"的工具。
+    var isOneShot: Bool {
+        switch self {
+        case .select, .view, .eraseBrush: return false
+        default: return true
+        }
+    }
+
+    /// 支持锁定的工具：双击锁定后可以连着画好几个（类似 Office 里锁定的格式刷），
+    /// 不必每画一笔就回头点一次按钮。文本 / 序号 / 擦除刷不在此列。
+    var supportsLock: Bool {
+        switch self {
+        case .arrow, .line, .pen, .rect, .roundedRect, .ellipse,
+             .solidRect, .solidRoundedRect, .solidEllipse:
+            return true
+        default:
+            return false
         }
     }
 

@@ -36,7 +36,7 @@ final class SettingsPanel: NSViewController {
         tooltip: "MinerU API Token：精准模式（vlm）解析时使用，在 mineru.net 的「API 管理」页面创建",
         accessibilityLabel: "MinerU token")
     private let volcRow = SecretFieldRow(
-        tooltip: "火山引擎 AI MediaKit 的 API Key：「魔法消除」用它做云端擦除重建，在 console.volcengine.com/imp/ai-mediakit/settings 创建",
+        tooltip: "火山引擎 AI MediaKit 的 API Key：「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）共用，在 console.volcengine.com/imp/ai-mediakit/settings 创建",
         accessibilityLabel: "火山引擎 API Key")
     private let recorder = HotkeyRecorderMonitor()
     private var currentHotkeyText: String
@@ -151,7 +151,7 @@ final class SettingsPanel: NSViewController {
             [makeFieldLabel("刷子粗细"), eraseBrushField, makeUnitLabel("4–240 像素")],
             [makeFieldLabel("超时时间"), timeoutField, makeUnitLabel("5–600 秒")],
             [makeFieldLabel("MinerU token"), tokenRow.stack, makeUnitLabel("精准解析用")],
-            [makeFieldLabel("火山 API Key"), volcRow.stack, makeUnitLabel("魔法消除用")],
+            [makeFieldLabel("火山 API Key"), volcRow.stack, makeUnitLabel("擦除/抠图用")],
             [makeFieldLabel("版本更新"), updateRow, makeUnitLabel("")]
         ])
         grid.rowSpacing = 10
@@ -165,7 +165,7 @@ final class SettingsPanel: NSViewController {
             grid.row(at: row).height = 28
         }
 
-        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。火山 API Key 供工具栏的「魔法消除」使用；留空则该按钮会提示去配置。「检查更新」到 Gitee 上查最新版本，按本机芯片自动匹配安装包；发现新版本只会先询问，同意后才下载并替换。")
+        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。火山 API Key 供工具栏的「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）使用；留空则这两个按钮都会提示去配置。「检查更新」到 Gitee 上查最新版本，按本机芯片自动匹配安装包；发现新版本只会先询问，同意后才下载并替换。")
         tip.font = .systemFont(ofSize: 11)
         tip.textColor = .secondaryLabelColor
         tip.translatesAutoresizingMaskIntoConstraints = false

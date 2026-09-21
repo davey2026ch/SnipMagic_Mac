@@ -19,13 +19,12 @@ DerivedData/
 .env
 .env.*
 
-# Optional: uncomment to ignore built app
-# dist/
-
-# Built app bundle internals (dmg/zip releases stay tracked)
-dist/*.app
-dist/*.app/**
-dist/*.zip
+# 本地资产：只留在本机，不入库、不发布到任何远端
+# （占位说明：产物走 Release 附件，不走源码仓库）
+dist/
+文档/
+logo/
+需求说明书*.docx
 
 # WorkBuddy local data
 .workbuddy/

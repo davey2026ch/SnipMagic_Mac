@@ -75,6 +75,9 @@ document-coordinate de-duplication, so overlapping scroll regions join without g
 - Region / long capture hotkeys (record a new combination; at least one modifier key).
 - **Theme**: dark / light / follow system (default: follow system).
 - Mosaic density, line width, extraction timeout, MinerU token.
+  The timeout (0–600 s) is how long the lightweight parser may take before the app falls back
+  to the precise (vlm) channel — **set it to `0` to skip the lightweight parser and use the
+  precise channel directly**.
 - The settings sheet shows the current version and build time.
 
 ## Configuration file

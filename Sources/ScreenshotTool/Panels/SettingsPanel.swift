@@ -14,7 +14,8 @@ final class SettingsPanel: NSViewController {
         _ minerUTimeout: TimeInterval,
         _ theme: ThemeMode,
         _ volcKey: String,
-        _ eraseBrush: CGFloat
+        _ eraseBrush: CGFloat,
+        _ borderCopy: Bool
     ) -> Void
 
     private let hotkeyButton = NSButton(title: "", target: nil, action: nil)
@@ -24,6 +25,8 @@ final class SettingsPanel: NSViewController {
     private let eraseBrushField = NSTextField()
     private let timeoutField = NSTextField()
     private let themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    /// 带边框复制开关：只影响粘贴到外部软件，应用内页签间复制粘贴永不加边框。
+    private let borderCopySwitch = NSSwitch()
     /// 版本更新行：手动检查按钮 + 状态文字。
     private let updateButton = NSButton(title: "检查更新", target: nil, action: nil)
     private let updateStatus = NSTextField(labelWithString: "")
@@ -51,6 +54,7 @@ final class SettingsPanel: NSViewController {
     private let thicknessSeed: CGFloat
     private let eraseBrushSeed: CGFloat
     private let themeSeed: ThemeMode
+    private let borderCopySeed: Bool
     private let previousHotkey: (keyCode: UInt32, modifiers: UInt32)
     private let previousLongHotkey: (keyCode: UInt32, modifiers: UInt32)
 
@@ -66,6 +70,7 @@ final class SettingsPanel: NSViewController {
         theme: ThemeMode,
         volcKey: String,
         eraseBrush: CGFloat,
+        borderCopy: Bool,
         onApply: @escaping (
             _ hotkey: (UInt32, UInt32)?,
             _ longHotkey: (UInt32, UInt32)?,
@@ -75,7 +80,8 @@ final class SettingsPanel: NSViewController {
             _ minerUTimeout: TimeInterval,
             _ theme: ThemeMode,
             _ volcKey: String,
-            _ eraseBrush: CGFloat
+            _ eraseBrush: CGFloat,
+            _ borderCopy: Bool
         ) -> Void
     ) {
         self.currentHotkeyText = hotkeyDisplay
@@ -84,6 +90,7 @@ final class SettingsPanel: NSViewController {
         self.thicknessSeed = thickness
         self.eraseBrushSeed = eraseBrush
         self.themeSeed = theme
+        self.borderCopySeed = borderCopy
         self.previousHotkey = HotkeyService.shared.currentHotkey
         self.previousLongHotkey = HotkeyService.shared.currentLongHotkey
         // 配置文件中的快捷键作为初始待生效值：
@@ -115,7 +122,7 @@ final class SettingsPanel: NSViewController {
     }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 592))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 632))
         // 显式铺主题底色：sheet 的窗口背景在暗色下才有保证，不依赖系统默认。
         root.wantsLayer = true
         root.layer?.backgroundColor = Theme.windowBackground.cgColor
@@ -124,7 +131,7 @@ final class SettingsPanel: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        preferredContentSize = NSSize(width: 720, height: 592)
+        preferredContentSize = NSSize(width: 720, height: 632)
 
         configureHotkeyButton(hotkeyButton, action: #selector(hotkeyButtonClicked))
         configureHotkeyButton(longHotkeyButton, action: #selector(longHotkeyButtonClicked))
@@ -134,6 +141,7 @@ final class SettingsPanel: NSViewController {
         configureNumberField(timeoutField, value: timeoutFieldSeed)
         timeoutField.toolTip = MinerUOCRService.AgentTimeout.unitTooltip
         configureThemePopup()
+        configureBorderCopySwitch()
         configureUpdateControls()
         tokenRow.delegate = self
         volcRow.delegate = self
@@ -147,6 +155,7 @@ final class SettingsPanel: NSViewController {
             [makeFieldLabel("区域截图快捷键"), hotkeyButton, makeUnitLabel("")],
             [makeFieldLabel("长截图快捷键"), longHotkeyButton, makeUnitLabel("")],
             [makeFieldLabel("主题"), themePopup, makeUnitLabel("默认跟随系统")],
+            [makeFieldLabel("带边框复制"), borderCopySwitch, makeUnitLabel("开启后，粘贴到外部软件（微信、office、邮件等）时自动添加外边框")],
             [makeFieldLabel("马赛克密度"), mosaicField, makeUnitLabel("2–64 像素/格")],
             [makeFieldLabel("线条粗细"), thicknessField, makeUnitLabel("1–40 像素")],
             [makeFieldLabel("刷子粗细"), eraseBrushField, makeUnitLabel("4–240 像素")],
@@ -264,6 +273,14 @@ final class SettingsPanel: NSViewController {
         themePopup.translatesAutoresizingMaskIntoConstraints = false
         themePopup.widthAnchor.constraint(equalToConstant: 160).isActive = true
         themePopup.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    }
+
+    /// 带边框复制开关（左右拨动）。初值来自配置文件；点「确定」时随其它设置一起保存。
+    private func configureBorderCopySwitch() {
+        borderCopySwitch.controlSize = .regular
+        borderCopySwitch.state = borderCopySeed ? .on : .off
+        borderCopySwitch.toolTip = "只影响粘贴到外部软件；在本软件页签之间复制粘贴永不加边框"
+        borderCopySwitch.translatesAutoresizingMaskIntoConstraints = false
     }
 
     /// 版本更新行：按钮 + 状态文字。状态初值直接显示当前版本与芯片架构，
@@ -465,7 +482,8 @@ final class SettingsPanel: NSViewController {
             timeout,
             selectedTheme,
             volcKey,
-            CGFloat(eraseBrush)
+            CGFloat(eraseBrush),
+            borderCopySwitch.state == .on
         )
         dismiss(nil)
     }

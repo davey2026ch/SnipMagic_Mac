@@ -1552,7 +1552,8 @@ final class EditorViewController: NSViewController {
             w.makeKeyAndOrderFront(nil)
             return
         }
-        let panel = ColorPickerPanel(initial: style.color) { [weak self] color in
+        // 侧栏工具色面板：快捷色只有白色。
+        let panel = ColorPickerPanel(initial: style.color, presets: [("白色", NSColor.white)]) { [weak self] color in
             guard let self else { return }
             self.style.color = color
             self.colorSwatch.color = color
@@ -1589,8 +1590,9 @@ final class EditorViewController: NSViewController {
             minerUTimeout: config.agentTimeout,
             theme: config.theme,
             volcKey: config.volcKey ?? "",
-            eraseBrush: config.eraseBrush
-        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme, volcKey, eraseBrush in
+            eraseBrush: config.eraseBrush,
+            borderCopy: config.borderCopyToExternal
+        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme, volcKey, eraseBrush, borderCopy in
             guard let self else { return }
             // 先应用新值（注册快捷键会同步更新 HotkeyService.current*）
             if let (key, mods) = hotkey {
@@ -1615,7 +1617,7 @@ final class EditorViewController: NSViewController {
             }
             // 主题：立刻应用（整窗跟随 appearance + 自绘 layer 重新取色）
             Theme.apply(mode: theme)
-            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题/火山 key）写入 ~/.SnipMagic.ini
+            // 正向生成：把全部设置项（快捷键/马赛克/粗细/token/超时/主题/火山 key/带边框复制）写入 ~/.SnipMagic.ini
             let savedCapture = HotkeyService.shared.currentHotkey
             let savedLong = HotkeyService.shared.currentLongHotkey
             MinerUOCRService.saveConfig(
@@ -1627,7 +1629,8 @@ final class EditorViewController: NSViewController {
                 agentTimeout: minerUTimeout,
                 theme: theme,
                 volcKey: volcKey,
-                eraseBrush: eraseBrush
+                eraseBrush: eraseBrush,
+                borderCopyToExternal: borderCopy
             )
         }
         // Present on the window's content VC — more reliable than self.presentAsSheet
@@ -1869,12 +1872,11 @@ final class EditorViewController: NSViewController {
 
     private func showTextPanel(at point: CGPoint) {
         guard currentTab != nil else { return }
-        let panel = TextInsertPanel(defaultColor: style.color) { [weak self] content, size, color, bold, opaque in
+        // 文字颜色与侧栏工具色彼此独立：默认值用文字面板自己的记忆，
+        // 确认后也不回写 style.color / colorSwatch。
+        let panel = TextInsertPanel(defaultColor: TextInsertPanel.lastColor) { [weak self] content, size, color, bold, opaque in
             guard let self else { return }
-            self.style.color = color
-            self.colorSwatch.color = color
-            self.canvas.style = self.style
-            self.canvas.insertText(origin: point, content: content, fontSize: size, bold: bold, opaque: opaque)
+            self.canvas.insertText(origin: point, content: content, fontSize: size, bold: bold, opaque: opaque, color: color)
         }
         presentAsSheet(panel)
     }
@@ -1890,6 +1892,7 @@ final class EditorViewController: NSViewController {
         ) { [weak self] content2, size, color, bold2, opaque2 in
             guard let self else { return }
             ann.color = color
+            TextInsertPanel.lastColor = color
             self.canvas.updateText(annotation: ann, content: content2, fontSize: size, bold: bold2, opaque: opaque2)
         }
         presentAsSheet(panel)

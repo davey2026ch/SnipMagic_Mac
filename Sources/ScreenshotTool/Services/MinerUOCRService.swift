@@ -132,6 +132,9 @@ enum MinerUOCRService {
         /// 火山引擎 AI MediaKit 的 API Key：「魔法消除」的云端擦除重建全靠它。
         /// 留空时点该按钮会提示去配置。
         var volcKey: String?
+        /// 带边框复制：开启时，复制到**外部软件**（微信/Office/邮件等）的图片自动加外边框。
+        /// 应用内页签之间复制粘贴不受影响，永不加边框。默认开启。
+        var borderCopyToExternal: Bool = true
 
         /// 与代码内置默认值完全一致的配置。
         static let defaults = MinerUConfig()
@@ -241,6 +244,13 @@ enum MinerUOCRService {
                 if let m = ThemeMode.parse(value) { config.theme = m }
             case "volc_key", "volc_api_key", "volcak":
                 if !value.isEmpty { config.volcKey = value }
+            case "border_copy_to_external", "bordercopytoexternal":
+                // 只认 1/0（兼容 true/false/on/off）；键缺失或值不认识 → 保持默认（开）。
+                switch value.lowercased() {
+                case "0", "false", "off", "no": config.borderCopyToExternal = false
+                case "1", "true", "on", "yes": config.borderCopyToExternal = true
+                default: break
+                }
             default:
                 break
             }
@@ -259,7 +269,8 @@ enum MinerUOCRService {
         agentTimeout: TimeInterval,
         theme: ThemeMode,
         volcKey: String?,
-        eraseBrush: CGFloat
+        eraseBrush: CGFloat,
+        borderCopyToExternal: Bool
     ) {
         var config = MinerUConfig()
         config.captureHotkey = captureHotkey
@@ -271,6 +282,7 @@ enum MinerUOCRService {
         config.agentTimeout = AgentTimeout.clamp(agentTimeout)
         config.theme = theme
         config.volcKey = volcKey
+        config.borderCopyToExternal = borderCopyToExternal
         try? configTemplate(config: config)
             .write(toFile: configPath(), atomically: true, encoding: .utf8)
     }
@@ -303,6 +315,9 @@ enum MinerUOCRService {
         # 火山引擎 AI MediaKit 的 API Key：「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）共用这一把，
         # 在 console.volcengine.com/imp/ai-mediakit/settings 创建；留空则这两个按钮都会提示去配置
         volc_key=\(config.volcKey ?? "")
+        # 带边框复制：1=粘贴到外部软件（微信、Office、邮件等）时自动加外边框；0=不加。
+        # 应用内页签之间复制粘贴不受本项影响，永不加边框
+        BorderCopyToExternal=\(config.borderCopyToExternal ? 1 : 0)
 
         """
     }

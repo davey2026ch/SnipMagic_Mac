@@ -7,6 +7,9 @@ import AppKit
 final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     private let initial: NSColor
     private let onPick: (NSColor) -> Void
+    /// 快捷色按钮（如 红/黑/白）：一点击立即应用并关闭，与吸管同节奏。
+    /// 各调用方自定（侧栏只要白色，文字面板要红/黑/白），互不影响。
+    private let presets: [(String, NSColor)]
     private var current: NSColor
     private var onClose: (() -> Void)?
 
@@ -22,8 +25,9 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     private let aField = NSTextField()
     private let hexField = NSTextField()
 
-    init(initial: NSColor, onPick: @escaping (NSColor) -> Void) {
+    init(initial: NSColor, presets: [(String, NSColor)] = [], onPick: @escaping (NSColor) -> Void) {
         self.initial = initial
+        self.presets = presets
         self.current = initial
         self.onPick = onPick
         super.init(nibName: nil, bundle: nil)
@@ -33,7 +37,7 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 540))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 580))
     }
 
     override func viewDidLoad() {
@@ -128,17 +132,24 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         hexRow.addArrangedSubview(hexField)
         stack.addArrangedSubview(hexRow)
 
+        // 拾取颜色独占一行，快捷色与确定/取消另起一行，避免拥挤。
+        let eyedrop = NSButton(title: "拾取颜色（屏幕任意位置取色）", target: self, action: #selector(startEyedropper))
+        eyedrop.bezelStyle = .rounded
+        stack.addArrangedSubview(eyedrop)
+
         let buttons = NSStackView()
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        let eyedrop = NSButton(title: "吸管（屏幕任意位置取色）", target: self, action: #selector(startEyedropper))
-        eyedrop.bezelStyle = .rounded
+        for (name, color) in presets {
+            let b = NSButton(title: name, target: self, action: #selector(presetClicked(_:)))
+            b.bezelStyle = .rounded
+            buttons.addArrangedSubview(b)
+        }
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelClicked))
         cancel.bezelStyle = .rounded
         let ok = NSButton(title: "确定", target: self, action: #selector(okClicked))
         ok.bezelStyle = .rounded
         ok.keyEquivalent = "\r"
-        buttons.addArrangedSubview(eyedrop)
         let sp = NSView()
         sp.setContentHuggingPriority(.defaultLow, for: .horizontal)
         buttons.addArrangedSubview(sp)
@@ -229,6 +240,13 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         }
     }
 
+    /// 快捷色：一点击立即应用并关闭（与吸管同节奏，无需再点确定）。
+    @objc private func presetClicked(_ sender: NSButton) {
+        guard let color = presets.first(where: { $0.0 == sender.title })?.1 else { return }
+        syncUI(from: color)
+        applyCurrentAndClose()
+    }
+
     @objc private func okClicked() {
         onPick(current)
         closePanel()
@@ -246,7 +264,7 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     func show(relativeTo parent: NSView, onClose: (() -> Void)? = nil) {
         self.onClose = onClose
         let window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 580),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -258,7 +276,7 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         if let pw = parent.window {
             let pwFrame = pw.frame
             let x = pwFrame.midX - 160
-            let y = pwFrame.midY - 270
+            let y = pwFrame.midY - 290
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
         window.makeKeyAndOrderFront(nil)

@@ -2,6 +2,9 @@ import AppKit
 
 /// Insert-text sheet: content, font size, color, bold, transparent background.
 final class TextInsertPanel: NSViewController {
+    /// 文字颜色独立记忆：与侧栏工具色互不联动，应用运行期间记住上次的文字颜色。
+    static var lastColor: NSColor = .systemRed
+
     private let onConfirm: (String, CGFloat, NSColor, Bool, Bool) -> Void
     private let defaultColor: NSColor
     private let initialContent: String
@@ -144,7 +147,14 @@ final class TextInsertPanel: NSViewController {
             w.makeKeyAndOrderFront(nil)
             return
         }
-        let panel = ColorPickerPanel(initial: pickedColor) { [weak self] color in
+        let panel = ColorPickerPanel(
+            initial: pickedColor,
+            presets: [
+                ("红色", NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)),
+                ("黑色", NSColor.black),
+                ("白色", NSColor.white)
+            ]
+        ) { [weak self] color in
             guard let self else { return }
             self.pickedColor = color
             self.colorSwatch.color = color
@@ -164,6 +174,8 @@ final class TextInsertPanel: NSViewController {
         let size = max(8, min(200, sizeField.doubleValue))
         // 勾选「背景透明」→ 不铺白底（opaqueBackground = false）
         let opaqueBackground = transparentCheck.state != .on
+        // 记入文字颜色自己的记忆（不碰侧栏工具色）。
+        TextInsertPanel.lastColor = pickedColor
         onConfirm(content, CGFloat(size), pickedColor, boldCheck.state == .on, opaqueBackground)
         dismiss(nil)
     }

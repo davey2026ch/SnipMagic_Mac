@@ -161,7 +161,7 @@ enum AppInfo {
     static let name = "截图大师 SnipMagic"
     static let bundleID = "com.mimo.snipmagic"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "3.3.0"
+    static let version = "3.4.0"
 }
 
 /// Borderless color swatch: flat rounded fill in the current brush color, no

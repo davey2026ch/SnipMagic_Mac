@@ -1455,12 +1455,13 @@ final class CanvasView: NSView {
         needsDisplay = true
     }
 
-    func insertText(origin: CGPoint, content: String, fontSize: CGFloat, bold: Bool, opaque: Bool) {
+    /// `color` 缺省时退回当前工具样式色；插入文字面板会显式传入自己的独立颜色。
+    func insertText(origin: CGPoint, content: String, fontSize: CGFloat, bold: Bool, opaque: Bool, color: NSColor? = nil) {
         guard let tab, !content.isEmpty else { return }
         onWillMutate?()
         let ann = Annotation(
             kind: .text(origin: origin, content: content, fontSize: fontSize, bold: bold, opaqueBackground: opaque),
-            color: style.color,
+            color: color ?? style.color,
             lineWidth: style.lineWidth
         )
         tab.annotations.append(ann)

@@ -24,6 +24,7 @@ final class HoverHint: NSObject {
     /// 又不至于扫过按钮就闪一下。
     static let showDelay: TimeInterval = 0.35
 
+
     /// 当前已经弹出来的那个（切按钮时先把它收掉）。
     private static weak var visible: HoverHint?
 
@@ -34,6 +35,7 @@ final class HoverHint: NSObject {
     private var panel: NSPanel?
     private var clickMonitor: Any?
     private var keyObserver: NSObjectProtocol?
+    private var frameObserver: NSKeyValueObservation?
 
     init(anchor: NSView, text: @escaping () -> HoverHintContent) {
         self.anchor = anchor
@@ -59,23 +61,48 @@ final class HoverHint: NSObject {
     static func install(on view: NSView, text: @escaping () -> HoverHintContent) -> HoverHint {
         let hint = HoverHint(anchor: view, text: text)
         objc_setAssociatedObject(view, &hoverHintAssociatedKey, hint, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        // 布局把按钮撑到真实尺寸时（frame 变化）重装一次 —— 光靠 viewDidMoveToWindow
+        // 拿到的还是 (0,0,0,0)。
+        hint.frameObserver = view.observe(\.frame, options: [.new]) { [weak hint] _, _ in
+            hint?.attachTracking()
+        }
         (view as? CapturePrimaryButton)?.hoverHint = hint
         hint.attachTracking()
         return hint
     }
 
     /// 视图进窗口（或几何变化）后重新挂一次追踪区。
+    /// 防重入：KVO / layout 回调里都可能调进来。
+    private var isAttachingTracking = false
     func attachTracking() {
+        guard !isAttachingTracking else { return }
+        isAttachingTracking = true
+        defer { isAttachingTracking = false }
         installTrackingArea()
     }
 
+    /// 装上（或重装）追踪区。
+    ///
+    /// ⚠️ 两个坑都踩过，别改回去：
+    /// 1. **必须在视图有真实 bounds 之后再装**。`viewDidMoveToWindow` 触发时 Auto Layout
+    ///    还没跑，按钮的 bounds 是 `(0,0,0,0)`；拿这个装出来的追踪区永远不派事件
+    ///    （连 `.inVisibleRect` 也救不回来），表现就是"悬浮没反应"。
+    /// 2. **owner 用视图自己**（NSResponder），事件到了再转交给 HoverHint —— 比让
+    ///    一个裸 NSObject 当 owner 稳妥。
     private func installTrackingArea() {
         guard let anchor else { return }
-        if let trackingArea { anchor.removeTrackingArea(trackingArea) }
+        if let trackingArea {
+            anchor.removeTrackingArea(trackingArea)
+            self.trackingArea = nil
+        }
+        let rect = anchor.bounds
+        guard rect.width > 1, rect.height > 1 else {
+            return
+        }
         let area = NSTrackingArea(
-            rect: anchor.bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self,
+            rect: rect,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .enabledDuringMouseDrag],
+            owner: anchor,
             userInfo: nil
         )
         anchor.addTrackingArea(area)
@@ -113,6 +140,7 @@ final class HoverHint: NSObject {
     // MARK: - 显示 / 隐藏
 
     private func show() {
+        // 窗口不是 key（应用不在前台）就不弹 —— 跟系统提示气泡的脾气一致。
         guard let anchor, let window = anchor.window, window.isKeyWindow else { return }
         HoverHint.visible?.hide()
 

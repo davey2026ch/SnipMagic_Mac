@@ -249,17 +249,30 @@ final class CapturePrimaryButton: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// 进窗口后才装得上 TrackingArea（装早了会静默失效）。
+    /// 进窗口后才装得上 TrackingArea（装早了会静默失效；那会儿 bounds 还是 0）。
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { hoverHint?.attachTracking() }
+        hoverHint?.attachTracking()
     }
+
+    /// 布局完成、尺寸落实之后再装一次 —— 上面那次拿到的 bounds 还是 (0,0,0,0)。
+    override func layout() {
+        super.layout()
+        hoverHint?.attachTracking()
+    }
+
+    /// TrackingArea 的 owner 是按钮自己，事件转交给气泡。
+    override func mouseEntered(with event: NSEvent) { hoverHint?.mouseEntered(with: event) }
+    override func mouseExited(with event: NSEvent) { hoverHint?.mouseExited(with: event) }
 
     private func configure(title: String, icon: String) {
         // Clear NSButton's own title — otherwise the default "Button"/「按钮」
         // is still drawn under our custom icon+label stack.
         self.title = ""
         self.attributedTitle = NSAttributedString(string: "")
+        // 标题清空了，辅助功能就再也读不到名字（VoiceOver 只会念"按钮"）。
+        // 用 setAccessibilityLabel 把名字补回去 —— 顺带也让自动化能按名字找到它。
+        setAccessibilityLabel(title)
         isBordered = false
         wantsLayer = true
         layer?.cornerRadius = 6

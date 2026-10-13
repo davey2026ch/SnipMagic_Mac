@@ -42,6 +42,14 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     /// 历史色（`#RRGGBB`，不含固定 3 色），最新在前，最多 21 条。
     private var recentHexes: [String] = []
     private var onClose: (() -> Void)?
+    /// ⚠️ 面板窗口必须由本控制器**自己强引用**。
+    ///
+    /// 程序化创建的 `NSPanel` 谁都不持有它 —— 平时只是"它正在屏幕上"这件事在替我们兜着。
+    /// 而吸管取色会把面板 `orderOut` 藏起来，这一藏就没人兜了：窗口会被释放，
+    /// **而且不会走 `windowWillClose`**（所以调用方连 `colorPanel = nil` 都不会收到）。
+    /// 等取完色再想 `makeKeyAndOrderFront`，`view.window` 已经是 nil —— 表现就是
+    /// "吸管取完色，颜色面板不见了"。关窗时置 nil，顺便断开与 contentViewController 的循环引用。
+    private var panelWindow: NSPanel?
 
     private let wheel = ColorWheelView()
     private let grid = ColorSwatchGridView()
@@ -368,16 +376,39 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
 
     /// 全屏取色：面板临时隐藏 → 全屏取色层 → 取到像素后**面板恢复并显示该颜色**。
     /// 和颜色格一样只改"当前颜色"，要不要用还得按「确定」——取完常常还要调透明度。
+    ///
+    /// 抓屏是异步的（ScreenCaptureKit），失败时**必须弹个说法**：以前是静默 return，
+    /// 用户只会觉得"点了吸管没反应"。
     @objc private func startEyedropper() {
-        view.window?.orderOut(nil)
+        panelWindow?.orderOut(nil)
         ScreenColorPicker.shared.begin { [weak self] color in
             guard let self else { return }
-            self.view.window?.makeKeyAndOrderFront(nil)
+            self.panelWindow?.makeKeyAndOrderFront(nil)
             self.syncUI(from: color.withAlphaComponent(self.current.alphaComponent))
         } onCancel: { [weak self] in
-            // 取消了就把面板原样还回来，颜色不动。
-            self?.view.window?.makeKeyAndOrderFront(nil)
+            self?.panelWindow?.makeKeyAndOrderFront(nil)
+        } onFailure: { [weak self] error in
+            self?.panelWindow?.makeKeyAndOrderFront(nil)
+            Self.reportEyedropperFailure(error)
         }
+    }
+
+    /// 取色失败时的提示。屏幕录制权限是最常见的原因，单独给一段能照着做的说明。
+    private static func reportEyedropperFailure(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "屏幕取色失败"
+        if case CaptureError.permissionDenied = error {
+            alert.informativeText = """
+            缺少屏幕录制权限，或权限尚未在当前进程生效。
+
+            请到「系统设置 → 隐私与安全性 → 屏幕录制」里打开本软件的开关，
+            然后完全退出本软件再重新打开。
+            """
+        } else {
+            alert.informativeText = error.localizedDescription
+        }
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     @objc private func okClicked() {
@@ -393,14 +424,21 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
     }
 
     private func closePanel() {
-        view.window?.close()
+        panelWindow?.close()
     }
 
     // MARK: - Window
 
     func windowWillClose(_ notification: Notification) {
-        onClose?()
-        onClose = nil
+        // 顺序有讲究：先取出回调、断开自持（这一步解除了与窗口的循环引用），
+        // 最后才回调调用方 —— 它在回调里会把最后一个引用放掉，本对象随即析构。
+        // 用 withExtendedLifetime 兜住 self，别在还没退出方法时就先被回收。
+        let cb = onClose
+        withExtendedLifetime(self) {
+            onClose = nil
+            panelWindow = nil
+            cb?()
+        }
     }
 
     func show(relativeTo parent: NSView, onClose: (() -> Void)? = nil) {
@@ -427,6 +465,7 @@ final class ColorPickerPanel: NSViewController, NSWindowDelegate {
         } else {
             window.center()
         }
+        panelWindow = window        // 自己持有，别让 orderOut 把它带走
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

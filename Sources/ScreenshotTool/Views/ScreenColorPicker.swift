@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 
 /// Fullscreen eyedropper overlay.
 ///
@@ -8,69 +9,105 @@ import AppKit
 /// cancels. Because pixels are read from the pre-captured frame, the picker
 /// sees anything that was on screen when it started: the editor canvas, the
 /// desktop wallpaper, other applications.
+///
+/// ⚠️ 截屏走 `ScreenCaptureService`（ScreenCaptureKit），**不要**换回
+/// `CGDisplayCreateImage`：那个 API 从 macOS 14 起废弃，macOS 26/27 的 SDK 里
+/// 已经被标成「不可用」—— 在那些系统上调用会直接拿不到图（而且不报错），
+/// 表现就是"点了吸管什么都没发生"。复用应用自己那套链路还有个好处：
+/// 权限、多屏选择、像素尺寸的口径跟区域截图完全一致。
 final class ScreenColorPicker: NSObject {
     static let shared = ScreenColorPicker()
 
     private var overlayWindow: NSWindow?
     private var keyMonitor: Any?
+    /// 防重入：抓屏是异步的，这中间再点一次不能起第二套。
+    private var isPicking = false
 
     /// Present the picker overlay. `onPick` fires with the picked color;
-    /// `onCancel` fires when the user cancels. Exactly one of them runs.
-    func begin(onPick: @escaping (NSColor) -> Void, onCancel: (() -> Void)? = nil) {
-        guard overlayWindow == nil else { return }
+    /// `onCancel` fires when the user cancels; `onFailure` fires when the
+    /// screen couldn't be captured (权限没给 / 抓屏失败) —— 必须给用户一个说法，
+    /// 不能像以前那样静默返回。
+    func begin(
+        onPick: @escaping (NSColor) -> Void,
+        onCancel: (() -> Void)? = nil,
+        onFailure: ((Error) -> Void)? = nil
+    ) {
+        guard overlayWindow == nil, !isPicking else { return }
+        isPicking = true
 
         // Small delay lets the color panel finish ordering out so it is not
         // captured into the frozen frame.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, self.overlayWindow == nil else { return }
+            guard let self else { return }
+            guard self.overlayWindow == nil else {
+                self.isPicking = false
+                return
+            }
 
             let mouse = NSEvent.mouseLocation
-            let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-            guard let screen,
-                  let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
-                  let capture = CGDisplayCreateImage(CGDirectDisplayID(num.uint32Value)) else {
+            guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
+                ?? NSScreen.main else {
+                self.isPicking = false
                 onCancel?()
                 return
             }
 
-            let overlay = PickerOverlayView(
-                capture: capture,
-                screenFrame: screen.frame,
-                scale: screen.backingScaleFactor,
-                onPick: { [weak self] color in self?.finish(picked: color, onPick: onPick, onCancel: onCancel) },
-                onCancel: { [weak self] in self?.finish(picked: nil, onPick: onPick, onCancel: onCancel) }
-            )
-
-            let window = NSWindow(
-                contentRect: screen.frame,
-                styleMask: .borderless,
-                backing: .buffered,
-                defer: false
-            )
-            window.contentView = overlay
-            window.level = .screenSaver
-            window.isOpaque = true
-            window.backgroundColor = .black
-            window.acceptsMouseMovedEvents = true
-            window.hidesOnDeactivate = false
-            window.canHide = false
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            self.overlayWindow = window
-
-            // Borderless windows never become key, so route Esc through a
-            // local event monitor instead of keyDown.
-            self.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                if event.keyCode == 53 {  // Esc
-                    self?.finish(picked: nil, onPick: onPick, onCancel: onCancel)
-                    return nil
+            Task { @MainActor in
+                do {
+                    let capture = try await ScreenCaptureService.shared.capture(screen: screen)
+                    self.isPicking = false
+                    self.present(capture: capture, screen: screen, onPick: onPick, onCancel: onCancel)
+                } catch {
+                    self.isPicking = false
+                    onFailure?(error)
                 }
-                return event
             }
-
-            NSCursor.crosshair.push()
-            window.orderFrontRegardless()
-            NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    private func present(
+        capture: CGImage,
+        screen: NSScreen,
+        onPick: @escaping (NSColor) -> Void,
+        onCancel: (() -> Void)?
+    ) {
+        let overlay = PickerOverlayView(
+            capture: capture,
+            screenFrame: screen.frame,
+            scale: screen.backingScaleFactor,
+            onPick: { [weak self] color in self?.finish(picked: color, onPick: onPick, onCancel: onCancel) },
+            onCancel: { [weak self] in self?.finish(picked: nil, onPick: onPick, onCancel: onCancel) }
+        )
+
+        let window = NSWindow(
+            contentRect: screen.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = overlay
+        window.level = .screenSaver
+        window.isOpaque = true
+        window.backgroundColor = .black
+        window.acceptsMouseMovedEvents = true
+        window.hidesOnDeactivate = false
+        window.canHide = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.overlayWindow = window
+
+        // Borderless windows never become key, so route Esc through a
+        // local event monitor instead of keyDown.
+        self.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 {  // Esc
+                self?.finish(picked: nil, onPick: onPick, onCancel: onCancel)
+                return nil
+            }
+            return event
+        }
+
+        NSCursor.crosshair.push()
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func finish(picked: NSColor?, onPick: (NSColor) -> Void, onCancel: (() -> Void)?) {

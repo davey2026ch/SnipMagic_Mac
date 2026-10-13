@@ -156,12 +156,57 @@ final class AppearanceAwareView: NSView {
     }
 }
 
+// MARK: - HEX ⇄ NSColor
+
+extension NSColor {
+    /// `#RRGGBB`（大写）。**故意不含透明度** —— 面板里的 HEX 框一直只表示 RGB，
+    /// 透明度另有滑杆；「最近使用」历史也只存 RGB。
+    var hexRGB: String {
+        let c = usingColorSpace(.sRGB) ?? self
+        let r = Int(round(min(max(c.redComponent, 0), 1) * 255))
+        let g = Int(round(min(max(c.greenComponent, 0), 1) * 255))
+        let b = Int(round(min(max(c.blueComponent, 0), 1) * 255))
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
+    /// 解析 `#RRGGBB` / `RRGGBB`（大小写、有无 `#` 都认）；非法返回 nil。
+    /// `alpha` 单独给：历史色一律按不透明还原，透明度由滑杆管。
+    static func fromHexRGB(_ raw: String, alpha: CGFloat = 1) -> NSColor? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, s.allSatisfy({ $0.isHexDigit }), let v = UInt32(s, radix: 16) else {
+            return nil
+        }
+        return NSColor(
+            srgbRed: CGFloat((v >> 16) & 0xff) / 255,
+            green: CGFloat((v >> 8) & 0xff) / 255,
+            blue: CGFloat(v & 0xff) / 255,
+            alpha: alpha
+        )
+    }
+
+    /// 只比 RGB，不比透明度 —— 「当前色 = 某个格子」判定用。
+    func isSameRGB(as other: NSColor) -> Bool {
+        hexRGB == other.hexRGB
+    }
+}
+
+/// 「当前颜色」长条里透出透明度用的棋盘格。亮色=白/浅灰，暗色=深灰/更深灰。
+enum CheckerboardColors {
+    static var light: NSColor {
+        Theme.isDark ? NSColor(calibratedWhite: 0.32, alpha: 1) : NSColor.white
+    }
+    static var dark: NSColor {
+        Theme.isDark ? NSColor(calibratedWhite: 0.20, alpha: 1) : NSColor(calibratedWhite: 0.87, alpha: 1)
+    }
+}
+
 enum AppInfo {
     /// 产品名：主窗口标题、托盘提示、App 菜单「关于 / 隐藏 / 退出」都用它。
     static let name = "截图大师 SnipMagic"
     static let bundleID = "com.mimo.snipmagic"
     /// Keep in sync with Resources/Info.plist CFBundleShortVersionString.
-    static let version = "3.4.0"
+    static let version = "3.5.0"
 }
 
 /// Borderless color swatch: flat rounded fill in the current brush color, no
@@ -191,6 +236,8 @@ final class CapturePrimaryButton: NSButton {
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let stack = NSStackView()
+    /// 「截图 / 长截图」这两个按钮挂的快捷键悬浮气泡（其余按钮没有）。
+    var hoverHint: HoverHint?
 
     init(title: String, icon: String = "viewfinder", target: AnyObject?, action: Selector?) {
         super.init(frame: .zero)
@@ -201,6 +248,12 @@ final class CapturePrimaryButton: NSButton {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 进窗口后才装得上 TrackingArea（装早了会静默失效）。
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { hoverHint?.attachTracking() }
+    }
 
     private func configure(title: String, icon: String) {
         // Clear NSButton's own title — otherwise the default "Button"/「按钮」

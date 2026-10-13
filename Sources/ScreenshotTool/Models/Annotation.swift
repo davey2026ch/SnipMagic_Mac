@@ -125,7 +125,7 @@ enum AnnotationKind {
     case ellipse(rect: CGRect)
     case solidRect(rect: CGRect, rounded: Bool)
     case solidEllipse(rect: CGRect)
-    case text(origin: CGPoint, content: String, fontSize: CGFloat, bold: Bool, opaqueBackground: Bool)
+    case text(origin: CGPoint, content: String, fontSize: CGFloat, bold: Bool, backgroundColor: NSColor?)
     case number(center: CGPoint, value: Int)
     case mosaic(rect: CGRect, cellSize: CGFloat, snapshot: CGImage)
     case pastedImage(origin: CGPoint, size: CGSize, image: CGImage)

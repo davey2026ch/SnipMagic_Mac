@@ -509,10 +509,10 @@ final class CanvasView: NSView {
             if let hit = annotation(at: p), case .text = hit.kind {
                 selectedAnnotation = hit
                 onRequestTextEdit?(hit)
-                if case .text(let origin, let content, let fontSize, let bold, let opaque) = hit.kind {
+                if case .text(let origin, let content, let fontSize, let bold, let background) = hit.kind {
                     pendingTextEditID = hit.id
                     pendingTextEditOrigin = origin
-                    _ = (content, fontSize, bold, opaque)
+                    _ = (content, fontSize, bold, background)
                 }
                 return
             }
@@ -910,12 +910,12 @@ final class CanvasView: NSView {
             var r = CGRect(origin: origin, size: size)
             r = applyResize(r, to: point)
             ann.kind = .pastedImage(origin: r.origin, size: r.size, image: image)
-        case .text(let origin, let content, let fontSize, let bold, let opaque):
+        case .text(let origin, let content, let fontSize, let bold, let background):
             let box = ann.boundingBox
             let original = max(hypot(box.width, box.height), 1)
             let current = max(hypot(point.x - origin.x, point.y - origin.y), 1)
             let newSize = max(8, min(200, fontSize * (current / original)))
-            ann.kind = .text(origin: origin, content: content, fontSize: newSize, bold: bold, opaqueBackground: opaque)
+            ann.kind = .text(origin: origin, content: content, fontSize: newSize, bold: bold, backgroundColor: background)
         default:
             break
         }
@@ -959,7 +959,7 @@ final class CanvasView: NSView {
             ann.kind = .solidEllipse(rect: r.offsetBy(dx: delta.x, dy: delta.y))
         case .text(let o, let c, let fs, let b, let bg):
             ann.kind = .text(origin: CGPoint(x: o.x + delta.x, y: o.y + delta.y),
-                             content: c, fontSize: fs, bold: b, opaqueBackground: bg)
+                             content: c, fontSize: fs, bold: b, backgroundColor: bg)
         case .number(let c, let v):
             ann.kind = .number(center: CGPoint(x: c.x + delta.x, y: c.y + delta.y), value: v)
         case .pastedImage(let o, let s, let img):
@@ -1446,21 +1446,22 @@ final class CanvasView: NSView {
         return "已粘贴 \(Int(imgSize.width)) × \(Int(imgSize.height)) 像素（拖动放置，点击空白处固定）"
     }
 
-    func updateText(annotation: Annotation, content: String, fontSize: CGFloat, bold: Bool, opaque: Bool) {
+    func updateText(annotation: Annotation, content: String, fontSize: CGFloat, bold: Bool, background: NSColor?) {
         guard case .text(let origin, _, _, _, _) = annotation.kind else { return }
         onWillMutate?()
-        annotation.kind = .text(origin: origin, content: content, fontSize: fontSize, bold: bold, opaqueBackground: opaque)
+        annotation.kind = .text(origin: origin, content: content, fontSize: fontSize, bold: bold, backgroundColor: background)
         tab?.markUnsaved()
         onAnnotationsChanged?()
         needsDisplay = true
     }
 
     /// `color` 缺省时退回当前工具样式色；插入文字面板会显式传入自己的独立颜色。
-    func insertText(origin: CGPoint, content: String, fontSize: CGFloat, bold: Bool, opaque: Bool, color: NSColor? = nil) {
+    /// `background` 是文字底色，nil = 不铺底（「背景透明」）。
+    func insertText(origin: CGPoint, content: String, fontSize: CGFloat, bold: Bool, background: NSColor?, color: NSColor? = nil) {
         guard let tab, !content.isEmpty else { return }
         onWillMutate?()
         let ann = Annotation(
-            kind: .text(origin: origin, content: content, fontSize: fontSize, bold: bold, opaqueBackground: opaque),
+            kind: .text(origin: origin, content: content, fontSize: fontSize, bold: bold, backgroundColor: background),
             color: color ?? style.color,
             lineWidth: style.lineWidth
         )

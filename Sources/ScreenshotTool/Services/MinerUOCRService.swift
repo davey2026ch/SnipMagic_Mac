@@ -135,6 +135,9 @@ enum MinerUOCRService {
         /// 带边框复制：开启时，复制到**外部软件**（微信/Office/邮件等）的图片自动加外边框。
         /// 应用内页签之间复制粘贴不受影响，永不加边框。默认开启。
         var borderCopyToExternal: Bool = true
+        /// 「最近使用颜色」：`#RRGGBB` 列表，最新在前，最多 21 条（红/黑/白是固定格，不记）。
+        /// 存进配置文件的 `RecentColors` 键；读写规则见 `RecentColorStore`。
+        var recentColors: [String] = []
 
         /// 与代码内置默认值完全一致的配置。
         static let defaults = MinerUConfig()
@@ -255,6 +258,11 @@ enum MinerUOCRService {
                 break
             }
         }
+
+        // 「最近使用颜色」单独走 RecentColorStore：它会顺手把老配置里的固定色/重复项
+        // 清掉并在必要时写回（只动 RecentColors 一行，不碰用户填的密钥）。
+        config.recentColors = RecentColorStore.load()
+
         return config
     }
 
@@ -283,6 +291,9 @@ enum MinerUOCRService {
         config.theme = theme
         config.volcKey = volcKey
         config.borderCopyToExternal = borderCopyToExternal
+        // 模板重写会把整份文件覆盖掉，所以「最近使用颜色」必须原样带上，
+        // 否则用户存一次设置就把取色历史清空了。
+        config.recentColors = RecentColorStore.currentSilently()
         try? configTemplate(config: config)
             .write(toFile: configPath(), atomically: true, encoding: .utf8)
     }
@@ -318,6 +329,9 @@ enum MinerUOCRService {
         # 带边框复制：1=粘贴到外部软件（微信、Office、邮件等）时自动加外边框；0=不加。
         # 应用内页签之间复制粘贴不受本项影响，永不加边框
         BorderCopyToExternal=\(config.borderCopyToExternal ? 1 : 0)
+        # 最近使用颜色（逗号分隔 #RRGGBB，最新在前，最多 \(RecentColorStore.maxCount) 条；
+        # 红/黑/白是取色面板里的固定格，不记在这里）。点取色面板的「确定」时自动写入
+        \(RecentColorStore.templateLine(config.recentColors))
 
         """
     }

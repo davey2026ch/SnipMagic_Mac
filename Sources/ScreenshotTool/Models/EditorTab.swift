@@ -171,14 +171,15 @@ enum AnnotationRenderer {
             }
         case .solidEllipse(let rect):
             ctx.fillEllipse(in: rect)
-        case .text(let origin, let content, let fontSize, let bold, let opaqueBackground):
+        case .text(let origin, let content, let fontSize, let bold, let backgroundColor):
             let font: NSFont = bold ? .boldSystemFont(ofSize: fontSize) : .systemFont(ofSize: fontSize)
             let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
             let ns = content as NSString
             let size = ns.size(withAttributes: attrs)
             let drawRect = CGRect(x: origin.x, y: origin.y, width: size.width + 8, height: size.height + 8)
-            if opaqueBackground {
-                ctx.setFillColor(NSColor.white.cgColor)
+            if let backgroundColor {
+                // 文字底色（可能是任意颜色，也可能半透明）；nil = 不铺底。
+                ctx.setFillColor((backgroundColor.usingColorSpace(.sRGB) ?? backgroundColor).cgColor)
                 ctx.fill(drawRect)
             }
             // Draw text via NSGraphicsContext for correct baseline handling.

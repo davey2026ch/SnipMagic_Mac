@@ -246,7 +246,18 @@ final class EditorViewController: NSViewController {
 
         let captureBtn = makePrimaryButton("开始截图", action: #selector(startCapture))
         let longCaptureBtn = makePrimaryButton("长截图", icon: "arrow.up.and.down", action: #selector(startLongCapture))
-        longCaptureBtn.toolTip = "框选区域后滚动页面（网页/文档），自动拼接为长图"
+        // 顶部这两个按钮改用自绘悬浮气泡（停留 0.35s）显示**当前**快捷键：
+        // 内容在弹出那一刻才现算，所以去设置里改完快捷键，回来悬浮就是新的。
+        // 其余按钮保持原有 toolTip 或干脆没有 —— 它们的中文名已经说明白了自己。
+        HoverHint.install(on: captureBtn) {
+            HoverHintContent("开始截图（\(HotkeyService.shared.displayString)）")
+        }
+        HoverHint.install(on: longCaptureBtn) {
+            HoverHintContent(
+                "长截图（\(HotkeyService.shared.longDisplayString)）",
+                subtitle: "框选区域后滚动页面（网页/文档），自动拼接为长图"
+            )
+        }
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
         // 下面这三个 AI 按钮**按用户指定顺序排**：提取内容 → 提取矢量图 → 魔法消除
@@ -1552,8 +1563,8 @@ final class EditorViewController: NSViewController {
             w.makeKeyAndOrderFront(nil)
             return
         }
-        // 侧栏工具色面板：快捷色只有白色。
-        let panel = ColorPickerPanel(initial: style.color, presets: [("白色", NSColor.white)]) { [weak self] color in
+        // 侧栏工具色面板：三处入口共用同一套（固定色/最近使用/吸管都在里面了）。
+        let panel = ColorPickerPanel(initial: style.color) { [weak self] color in
             guard let self else { return }
             self.style.color = color
             self.colorSwatch.color = color
@@ -1874,26 +1885,26 @@ final class EditorViewController: NSViewController {
         guard currentTab != nil else { return }
         // 文字颜色与侧栏工具色彼此独立：默认值用文字面板自己的记忆，
         // 确认后也不回写 style.color / colorSwatch。
-        let panel = TextInsertPanel(defaultColor: TextInsertPanel.lastColor) { [weak self] content, size, color, bold, opaque in
+        let panel = TextInsertPanel(defaultColor: TextInsertPanel.lastColor) { [weak self] content, size, color, bold, background in
             guard let self else { return }
-            self.canvas.insertText(origin: point, content: content, fontSize: size, bold: bold, opaque: opaque, color: color)
+            self.canvas.insertText(origin: point, content: content, fontSize: size, bold: bold, background: background, color: color)
         }
         presentAsSheet(panel)
     }
 
     private func showTextEditPanel(for ann: Annotation) {
-        guard case .text(_, let content, let fontSize, let bold, let opaque) = ann.kind else { return }
+        guard case .text(_, let content, let fontSize, let bold, let background) = ann.kind else { return }
         let panel = TextInsertPanel(
             defaultColor: ann.color,
             content: content,
             fontSize: fontSize,
             bold: bold,
-            opaqueBackground: opaque
-        ) { [weak self] content2, size, color, bold2, opaque2 in
+            backgroundColor: background
+        ) { [weak self] content2, size, color, bold2, background2 in
             guard let self else { return }
             ann.color = color
             TextInsertPanel.lastColor = color
-            self.canvas.updateText(annotation: ann, content: content2, fontSize: size, bold: bold2, opaque: opaque2)
+            self.canvas.updateText(annotation: ann, content: content2, fontSize: size, bold: bold2, background: background2)
         }
         presentAsSheet(panel)
     }

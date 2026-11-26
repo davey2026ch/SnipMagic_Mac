@@ -110,6 +110,22 @@ enum MinerUOCRService {
     private static let pollInterval: TimeInterval = 2.0
     private static let vlmTimeout: TimeInterval = 300.0
 
+    /// 所有 MinerU 请求共用的会话：**临时会话 + 无本地缓存**。
+    ///
+    /// 为什么不能用 `URLSession.shared`：它挂的是 `URLCache.shared`，响应会按缓存策略
+    /// 写进 `~/Library/Caches/<bundle-id>/Cache.db` 和 `fsCachedData/`。
+    /// 走这条链路的数据里包含用户截图本身（上传体）、识别结果包（zip / full.md / images），
+    /// 一旦落进缓存目录就是"没人点保存但磁盘上有图"，属于必须堵掉的泄密面。
+    /// 显式 `urlCache = nil` 连内存缓存也不用，反正这些请求从不重复。
+    static let networkSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 600
+        return URLSession(configuration: config)
+    }()
+
     // MARK: - Config（~/.SnipMagic.ini）
 
     struct MinerUConfig {
@@ -490,7 +506,7 @@ enum MinerUOCRService {
         timeout: TimeInterval,
         completion: @escaping (Result<(markdown: String, images: [ExtractedImage]), Error>) -> Void
     ) {
-        let session = URLSession.shared
+        let session = networkSession
         agentRequestUploadURL(session: session, fileName: fileName) { result in
             guard !task.isCancelled else { return }
             switch result {
@@ -747,7 +763,7 @@ enum MinerUOCRService {
             completion(.failure(MinerUOCRError.tokenMissing))
             return
         }
-        let session = URLSession.shared
+        let session = networkSession
 
         v4RequestBatchUploadURL(session: session, token: token, fileName: fileName) { result in
             guard !task.isCancelled else { return }

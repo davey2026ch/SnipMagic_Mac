@@ -88,9 +88,21 @@ final class UpdateService: NSObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // 安装包自己会落到 updates/ 目录（那是更新流程的一部分），
+        // 但不许再额外往 URL 缓存里存一份。
+        config.urlCache = nil
         let queue = OperationQueue.main
         queue.maxConcurrentOperationCount = 1
         return URLSession(configuration: config, delegate: self, delegateQueue: queue)
+    }()
+
+    /// 版本清单查询用的会话：临时会话，不碰任何本地缓存。
+    private static let checkSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.timeoutIntervalForRequest = 20
+        return URLSession(configuration: config)
     }()
 
     private var downloadCompletion: ((Result<URL, Error>) -> Void)?
@@ -154,7 +166,7 @@ final class UpdateService: NSObject {
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        Self.checkSession.dataTask(with: request) { data, response, error in
             let outcome = Self.evaluate(data: data, response: response, error: error)
             DispatchQueue.main.async { completion(outcome) }
         }.resume()
@@ -631,11 +643,17 @@ final class UpdateService: NSObject {
                 mv "$BACKUP" "$APP"
                 /usr/bin/open "$APP"
             fi
+            REPLACED=1
         else
             # 没有写权限（例如装在只读位置）：把安装包打开，交给用户手动拖
             /usr/bin/open "$DMG"
+            REPLACED=0
         fi
         rm -rf "$STAGE"
+        # 换成功了就把安装包删掉，别在缓存目录里留一份 dmg。
+        if [ "$REPLACED" = "1" ]; then rm -f "$DMG"; fi
+        # 脚本删自己必须延后：bash 还在按行读这个文件，读之前删掉会中断执行。
+        ( sleep 3; rm -f "$0" ) >/dev/null 2>&1 &
         """
 
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)

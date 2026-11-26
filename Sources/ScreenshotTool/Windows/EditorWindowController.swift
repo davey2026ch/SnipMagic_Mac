@@ -21,6 +21,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.titlebarAppearsTransparent = false
         window.titleVisibility = .visible
         window.isReleasedWhenClosed = false
+        // 不参与系统的「恢复窗口状态」：那会在 ~/Library/Saved Application State/ 里
+        // 留状态文件。截图工具不需要被系统记住上次开着什么，越少轨迹越好。
+        window.isRestorable = false
         window.center()
         window.setFrameAutosaveName("EditorWindow")
 

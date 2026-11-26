@@ -15,6 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let defaultsKeyLogin = "launchAtLogin"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 断掉「网络响应悄悄落到磁盘」这条路：`URLCache.shared` 默认会写
+        // ~/Library/Caches/<bundle-id>/Cache.db + fsCachedData，OCR 结果包、
+        // 更新清单这类响应都会在里面留一份副本。内存缓存保留，磁盘容量给 0。
+        URLCache.shared = URLCache(memoryCapacity: 4 << 20, diskCapacity: 0, diskPath: nil)
+
+        // 上次崩溃/强杀留下的解压目录、打包目录、半截安装包，启动时清掉。
+        DiskHygiene.sweepOnLaunch()
+
         MinerUOCRService.ensureConfigFile() // ~/.SnipMagic.ini 不存在则自动创建（含旧配置文件一次性迁移）
         // 主题：配置里没有 theme 键（老版本升级上来的文件）时按「跟随系统」处理。
         // 必须在建窗之前应用，否则首帧会用旧配色。

@@ -4,7 +4,7 @@
 **GIF screen recording**, multi-tab annotation editing, side-by-side comparison, zooming, a screen colour picker and
 OCR text/table extraction — ready to use out of the box.
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v4.0.0-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v4.0.1-blue)
 
 English | [简体中文](README.md)
 
@@ -34,6 +34,12 @@ English | [简体中文](README.md)
   animated tab where you can **annotate individual frames**, **delete frames from the thumbnail
   strip** (current / all on the left / all on the right) and export — annotations and deletions
   are baked into the saved `.gif`.
+- **No disk residue (default, nothing to configure)**: capture pixels and every editing step
+  live **only in memory**; a file is written solely to the place you pick when saving — no
+  copies in cache folders, temp folders, or anywhere else. Cloud features (OCR, AI erase,
+  AI cut-out, update check) use non-caching connections too; steps that must touch a temp
+  folder (unzip / package) clean up immediately and are swept again on the next launch if the
+  app was killed.
 
 ## Capture modes
 
@@ -134,8 +140,8 @@ settings sheet writes the key back.
 ## Installation
 
 1. Download the latest `.dmg` from [Gitee Releases](https://gitee.com/mrpu2020/SnipMagic_Mac/releases):
-   - **Apple Silicon (M series)**: `截图大师SnipMagic-v4.0.0.dmg` (arm64)
-   - **Intel Mac**: `截图大师SnipMagic-v4.0.0-x86_64.dmg` (x86_64)
+   - **Apple Silicon (M series)**: `截图大师SnipMagic-v4.0.1.dmg` (arm64)
+   - **Intel Mac**: `截图大师SnipMagic-v4.0.1-x86_64.dmg` (x86_64)
 2. Open the dmg and drag **截图大师SnipMagic** into `Applications`.
 3. **First launch**: the app is self-signed, so right-click it in `Applications` → **Open** →
    **Open** again to get past Gatekeeper.

@@ -2,7 +2,7 @@
 
 **截图大师 SnipMagic** 是一款用 Swift 编写的 macOS 原生截图工具：区域截图、滚动长截图、**GIF 屏幕录制**、多页签标注编辑、左右对比、缩放、取色、OCR 文字/表格识别，开箱即用。
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v4.0.0-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/版本-v4.0.1-blue)
 
 [English](README.en.md) | 简体中文
 
@@ -45,6 +45,8 @@
 **8、GIF 屏幕录制：** 工具栏「GIF」开一个中间透明的录制窗，框住区域就能录；录完自动生成动图页签，可在播放页**逐帧标注**、**右键删帧**，再导出 GIF。默认把**鼠标箭头**一起录进去（引导观众看哪里），帧率可调（默认 24）。
 
 **9、支持自动更新**：启动时静默检查云端新版本，发现后弹窗询问，同意才下载安装；按本机芯片（Apple 芯片 / Intel）自动匹配安装包。设置界面亦可手动检查。
+
+**10、不留落地痕迹（默认行为，无需任何设置）**：截图、长截图、GIF 的画面像素与全部编辑过程**只在内存里**，只有你在保存时选定的位置才会写出文件 —— 不会在缓存目录、临时目录或任何其它路径留副本。联网功能（提取内容 / 魔法消除 / 提取矢量图 / 检查更新）同样走不落盘的临时通道；解压、打包这类必须经过临时目录的步骤用完即删，异常退出后下次启动补清。
 
 ## 功能特性
 
@@ -256,8 +258,8 @@
 ### 下载安装（推荐）
 
 1. 前往 [Releases](https://gitee.com/mrpu2020/SnipMagic_Mac/releases) 下载最新 `.dmg`；
-   - **Apple Silicon（M 系列）**：下载 `截图大师SnipMagic-v4.0.0.dmg`（arm64）
-   - **Intel Mac**：下载 `截图大师SnipMagic-v4.0.0-x86_64.dmg`（x86_64）
+   - **Apple Silicon（M 系列）**：下载 `截图大师SnipMagic-v4.0.1.dmg`（arm64）
+   - **Intel Mac**：下载 `截图大师SnipMagic-v4.0.1-x86_64.dmg`（x86_64）
 2. 打开 dmg，将「截图大师SnipMagic」拖入 `Applications` 文件夹；
 3. **首次启动**：因使用自签名证书，请在「应用程序」中**右键 → 打开**，再点「打开」以通过 Gatekeeper；
 4. 首次使用需授予**屏幕录制**权限（系统会自动引导，授权后重启应用生效）。
@@ -328,7 +330,7 @@ swift run ScreenshotTool
 >
 > **多架构说明**：本机为 Apple Silicon 时，脚本用 `swift build --triple x86_64-apple-macosx14.0.0` 交叉编译 Intel 版本，无需 Intel 机器。Swift 6.4 的 swift build 不支持 `--arch`，必须用 `--triple`；triple 版本号要跟 `Package.swift` 的 `platforms: [.macOS(.v14)]` 对齐。
 >
-> **架构约定**：`dist/截图大师SnipMagic.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图大师SnipMagic-v4.0.0.dmg` = arm64，`截图大师SnipMagic-v4.0.0-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
+> **架构约定**：`dist/截图大师SnipMagic.app` 永远只放 **arm64（M 芯片）** 版本，本机双击即用；只有 dmg 才区分架构（`截图大师SnipMagic-v4.0.1.dmg` = arm64，`截图大师SnipMagic-v4.0.1-x86_64.dmg` = Intel）。非 arm64 的 dmg 在 `/tmp` 临时目录里组装 .app，打完即删，不会污染 `dist/`。
 
 ## 项目结构
 

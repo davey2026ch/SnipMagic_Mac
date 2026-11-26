@@ -26,6 +26,8 @@ final class CaptureOverlayController: NSWindowController {
     private var dragOrigin: CGPoint?
     private var localMonitor: Any?
     private let mode: CaptureMode
+    /// 同一时刻"带鼠标箭头"的那一帧，仅区域截图且开关打开时才有值。
+    private let cursorImage: CGImage?
 
     weak var overlayDelegate: CaptureOverlayDelegate?
 
@@ -33,9 +35,12 @@ final class CaptureOverlayController: NSWindowController {
         window!.contentView as! OverlayView
     }
 
-    init(screen: NSScreen, image: CGImage, mode: CaptureMode = .region) {
+    init(screen: NSScreen, image: CGImage, cursorImage: CGImage? = nil, mode: CaptureMode = .region) {
         self.screen = screen
         self.screenImage = image
+        // 浮层底图始终**不带**箭头（冻住的箭头会误导拖框），
+        // 真到出图时再从这张"带箭头"的同帧里裁 —— 箭头位置就是用户按热键时的位置。
+        self.cursorImage = cursorImage
         self.mode = mode
         let frame = screen.frame
         let window = OverlayWindow(
@@ -145,7 +150,8 @@ final class CaptureOverlayController: NSWindowController {
         let crop = CGRect(x: px.rounded(), y: py.rounded(), width: pw.rounded(), height: ph.rounded())
             .intersection(CGRect(x: 0, y: 0, width: CGFloat(screenImage.width), height: imageH))
 
-        guard crop.width >= 3, crop.height >= 3, let cropped = screenImage.cropping(to: crop) else {
+        let source = (mode == .region ? (cursorImage ?? screenImage) : screenImage)
+        guard crop.width >= 3, crop.height >= 3, let cropped = source.cropping(to: crop) else {
             cancel()
             return
         }

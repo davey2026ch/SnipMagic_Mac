@@ -1,19 +1,19 @@
 # SnipMagic for macOS
 
 **SnipMagic** (截图大师) is a native macOS screenshot tool written in Swift: region capture, scrolling long capture,
-multi-tab annotation editing, side-by-side comparison, zooming, a screen colour picker and
+**GIF screen recording**, multi-tab annotation editing, side-by-side comparison, zooming, a screen colour picker and
 OCR text/table extraction — ready to use out of the box.
 
-![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v3.4.0-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138) ![macOS](https://img.shields.io/badge/macOS-14%2B-000000) ![License](https://img.shields.io/badge/License-MIT-green) ![Release](https://img.shields.io/badge/version-v4.0.0-blue)
 
 English | [简体中文](README.md)
 
 ## Highlights
 
 - **Capture**: region capture and scrolling long capture, one tab per image.
-- **Never captures the pointer**: the mouse arrow and click gesture ring are excluded from
-  both region and long captures — the live cursor still shows while you drag to select, it
-  just never ends up in the saved image.
+- **Pointer is optional**: region captures leave the mouse arrow out by default (a toggle in
+  Settings can include it); long captures never include it, because stitching would repeat the
+  arrow across frames; GIF recordings include it by default so viewers can follow your clicks.
 - **Multi-tab editor**: every capture becomes a tab (P1, P2, …) you can switch, reorder by
   dragging, and close from the right-click menu.
 - **Compare two images**: drag a tab onto the right half (or use the tab context menu) to
@@ -30,13 +30,17 @@ English | [简体中文](README.md)
   Word with real alpha preserved.
 - **OCR / content extraction**: text + tables (and images on some pages), exported to
   Markdown, Word or Excel.
+- **GIF recording**: a hollow recording window frames the area; the result opens as an
+  animated tab where you can **annotate individual frames**, **delete frames from the thumbnail
+  strip** (current / all on the left / all on the right) and export — annotations and deletions
+  are baked into the saved `.gif`.
 
 ## Capture modes
 
 | Mode | Default shortcut | Notes |
 | --- | --- | --- |
-| Region capture | `⌘ ⇧ R` | Drag to select any area; our own windows are excluded, and no mouse pointer is included |
-| Long capture | `⌘ ⇧ E` | Select an area, then scroll the page — frames are stitched into one tall image, also without the pointer |
+| Region capture | `⌘ ⇧ R` | Drag to select any area; our own windows are excluded. The pointer is **off by default** (Settings → "录制鼠标箭头 / 截图") |
+| Long capture | `⌘ ⇧ E` | Select an area, then scroll the page — frames are stitched into one tall image. The pointer is **never** included (stitching would repeat it) |
 
 **Stitching algorithm**: row signatures (16 segments) + full dy-offset search + candidate
 pixel verification + seam refinement (SAD correlation), with sticky top/bottom detection and
@@ -57,6 +61,27 @@ document-coordinate de-duplication, so overlapping scroll regions join without g
 - **`⌘C`** copies intelligently: rubber-band selection → selected pasted image → selected
   shape's bounding box → whole image.
 
+## GIF recording
+
+The **GIF** button in the toolbar opens a hollow recording window: the hole is live desktop
+pixels, the border and the bottom control bar sit outside it and are never recorded. Frame the
+area, press **● Record**.
+
+- The window keeps the three standard macOS traffic lights, can be dragged and resized, and is
+  **locked in place while recording**. Closing it or pressing `Esc` cancels.
+- Control bar: `● Record / ✕ Cancel` → `⏸ Pause / ■ Stop` → `● Resume / ■ Stop`, with a live
+  "recording 00:05 · 12 frames · 24 fps" readout. Its colours follow the app theme.
+- **Frame rate** is configurable (1–60, default 24). GIF delays bottom out at 2/100 s, so the
+  capture rate is `min(setting, 50)` — the window says "GIF 上限 50" when capped.
+- **Static scenes are merged**: unchanged frames are not added, the previous frame simply stays
+  longer (2 s per frame at most), so recording a still screen does not produce hundreds of frames.
+- Playback never starts by itself: use the play button or `Space`. Without looping it stops on
+  the last frame; pressing play again restarts from frame 1.
+- On the playback page you can **✎ edit the current frame** with the normal annotation tools
+  (arrows, text, mosaic, magic erase …) while the strip and control bar stay usable, and
+  **right-click a thumbnail** to delete the current frame, all frames to its left, or all frames
+  to its right. Saving the GIF bakes both kinds of edits into the file.
+
 ## Content extraction (OCR)
 
 - Click **Extract content** in the toolbar: the current tab (or just the selection) is sent
@@ -75,6 +100,8 @@ document-coordinate de-duplication, so overlapping scroll regions join without g
 - Region / long capture hotkeys (record a new combination; at least one modifier key).
 - **Theme**: dark / light / follow system (default: follow system).
 - Mosaic density, line width, extraction timeout, MinerU token.
+- **GIF frame rate** (1–60, default 24) and **录制鼠标箭头** — two checkboxes that decide whether
+  screenshots and GIF recordings include the mouse pointer (screenshots off, GIF on by default).
   The timeout (0–600 s) is how long the lightweight parser may take before the app falls back
   to the precise (vlm) channel — **set it to `0` to skip the lightweight parser and use the
   precise channel directly**.
@@ -92,6 +119,9 @@ line_width=4
 token=sk-...
 agent_timeout=10
 theme=system        # dark / light / system (default when missing)
+gif_fps=24          # GIF recording frame rate (1–60)
+cursor_screenshot=0 # include the mouse pointer in screenshots (0/1)
+cursor_gif=1        # include the mouse pointer in GIF recordings (0/1)
 ```
 
 Older config files that do not contain `theme` are treated as **follow system**; saving the
@@ -104,8 +134,8 @@ settings sheet writes the key back.
 ## Installation
 
 1. Download the latest `.dmg` from [Gitee Releases](https://gitee.com/mrpu2020/SnipMagic_Mac/releases):
-   - **Apple Silicon (M series)**: `截图大师SnipMagic-v3.4.0.dmg` (arm64)
-   - **Intel Mac**: `截图大师SnipMagic-v3.4.0-x86_64.dmg` (x86_64)
+   - **Apple Silicon (M series)**: `截图大师SnipMagic-v4.0.0.dmg` (arm64)
+   - **Intel Mac**: `截图大师SnipMagic-v4.0.0-x86_64.dmg` (x86_64)
 2. Open the dmg and drag **截图大师SnipMagic** into `Applications`.
 3. **First launch**: the app is self-signed, so right-click it in `Applications` → **Open** →
    **Open** again to get past Gatekeeper.

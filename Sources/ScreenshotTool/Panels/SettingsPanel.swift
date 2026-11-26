@@ -15,7 +15,10 @@ final class SettingsPanel: NSViewController {
         _ theme: ThemeMode,
         _ volcKey: String,
         _ eraseBrush: CGFloat,
-        _ borderCopy: Bool
+        _ borderCopy: Bool,
+        _ gifFps: Int,
+        _ cursorInScreenshot: Bool,
+        _ cursorInGif: Bool
     ) -> Void
 
     private let hotkeyButton = NSButton(title: "", target: nil, action: nil)
@@ -24,6 +27,10 @@ final class SettingsPanel: NSViewController {
     private let thicknessField = NSTextField()
     private let eraseBrushField = NSTextField()
     private let timeoutField = NSTextField()
+    private let gifFpsField = NSTextField()
+    /// 「录制鼠标箭头」的两个复选按钮：截图 / GIF录制。
+    private let cursorShotCheck = FlatCheckbox(title: "截图", checked: false)
+    private let cursorGifCheck = FlatCheckbox(title: "GIF录制", checked: false)
     private let themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     /// 带边框复制开关：只影响粘贴到外部软件，应用内页签间复制粘贴永不加边框。
     private let borderCopySwitch = NSSwitch()
@@ -55,6 +62,9 @@ final class SettingsPanel: NSViewController {
     private let eraseBrushSeed: CGFloat
     private let themeSeed: ThemeMode
     private let borderCopySeed: Bool
+    private let gifFpsSeed: Int
+    private let cursorScreenshotSeed: Bool
+    private let cursorGifSeed: Bool
     private let previousHotkey: (keyCode: UInt32, modifiers: UInt32)
     private let previousLongHotkey: (keyCode: UInt32, modifiers: UInt32)
 
@@ -71,6 +81,9 @@ final class SettingsPanel: NSViewController {
         volcKey: String,
         eraseBrush: CGFloat,
         borderCopy: Bool,
+        gifFps: Int,
+        cursorInScreenshot: Bool,
+        cursorInGif: Bool,
         onApply: @escaping (
             _ hotkey: (UInt32, UInt32)?,
             _ longHotkey: (UInt32, UInt32)?,
@@ -81,7 +94,10 @@ final class SettingsPanel: NSViewController {
             _ theme: ThemeMode,
             _ volcKey: String,
             _ eraseBrush: CGFloat,
-            _ borderCopy: Bool
+            _ borderCopy: Bool,
+            _ gifFps: Int,
+            _ cursorInScreenshot: Bool,
+            _ cursorInGif: Bool
         ) -> Void
     ) {
         self.currentHotkeyText = hotkeyDisplay
@@ -91,6 +107,9 @@ final class SettingsPanel: NSViewController {
         self.eraseBrushSeed = eraseBrush
         self.themeSeed = theme
         self.borderCopySeed = borderCopy
+        self.gifFpsSeed = min(max(gifFps, 1), 60)
+        self.cursorScreenshotSeed = cursorInScreenshot
+        self.cursorGifSeed = cursorInGif
         self.previousHotkey = HotkeyService.shared.currentHotkey
         self.previousLongHotkey = HotkeyService.shared.currentLongHotkey
         // 配置文件中的快捷键作为初始待生效值：
@@ -122,7 +141,7 @@ final class SettingsPanel: NSViewController {
     }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 632))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 728))
         // 显式铺主题底色：sheet 的窗口背景在暗色下才有保证，不依赖系统默认。
         root.wantsLayer = true
         root.layer?.backgroundColor = Theme.windowBackground.cgColor
@@ -131,7 +150,7 @@ final class SettingsPanel: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        preferredContentSize = NSSize(width: 720, height: 632)
+        preferredContentSize = NSSize(width: 720, height: 728)
 
         configureHotkeyButton(hotkeyButton, action: #selector(hotkeyButtonClicked))
         configureHotkeyButton(longHotkeyButton, action: #selector(longHotkeyButtonClicked))
@@ -139,6 +158,8 @@ final class SettingsPanel: NSViewController {
         configureNumberField(thicknessField, value: thicknessSeed)
         configureNumberField(eraseBrushField, value: eraseBrushSeed)
         configureNumberField(timeoutField, value: timeoutFieldSeed)
+        configureNumberField(gifFpsField, value: CGFloat(gifFpsSeed))
+        gifFpsField.toolTip = "每秒抓取帧数（1-60），默认 24；数值越大越流畅、文件也越大"
         timeoutField.toolTip = MinerUOCRService.AgentTimeout.unitTooltip
         configureThemePopup()
         configureBorderCopySwitch()
@@ -151,7 +172,7 @@ final class SettingsPanel: NSViewController {
 
         // Equal-height form rows. Unit hints stay single-line so no row
         // gets taller than the others.
-        let grid = NSGridView(views: [
+        let rows: [[NSView]] = [
             [makeFieldLabel("区域截图快捷键"), hotkeyButton, makeUnitLabel("")],
             [makeFieldLabel("长截图快捷键"), longHotkeyButton, makeUnitLabel("")],
             [makeFieldLabel("主题"), themePopup, makeUnitLabel("默认跟随系统")],
@@ -159,11 +180,14 @@ final class SettingsPanel: NSViewController {
             [makeFieldLabel("马赛克密度"), mosaicField, makeUnitLabel("2–64 像素/格")],
             [makeFieldLabel("线条粗细"), thicknessField, makeUnitLabel("1–40 像素")],
             [makeFieldLabel("刷子粗细"), eraseBrushField, makeUnitLabel("4–240 像素")],
+            [makeFieldLabel("GIF帧率"), gifFpsField, makeUnitLabel("1–60 帧/秒（默认 24）")],
+            [makeFieldLabel("录制鼠标箭头"), makeCursorChecksRow(), makeUnitLabel("勾选后画面会带上鼠标箭头")],
             [makeFieldLabel("超时时间"), timeoutField, makeUnitLabel(MinerUOCRService.AgentTimeout.unitHint)],
             [makeFieldLabel("MinerU token"), tokenRow.stack, makeUnitLabel("精准解析用")],
             [makeFieldLabel("火山 API Key"), volcRow.stack, makeUnitLabel("擦除/抠图用")],
             [makeFieldLabel("版本更新"), updateRow, makeUnitLabel("")]
-        ])
+        ]
+        let grid = NSGridView(views: rows)
         grid.rowSpacing = 10
         grid.columnSpacing = 12
         grid.xPlacement = .leading
@@ -175,7 +199,7 @@ final class SettingsPanel: NSViewController {
             grid.row(at: row).height = 28
         }
 
-        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；「填 0」表示跳过轻量解析、直接使用精准解析（需先填好 MinerU token）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。火山 API Key 供工具栏的「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）使用；留空则这两个按钮都会提示去配置。「检查更新」到 Gitee 上查最新版本，按本机芯片自动匹配安装包；发现新版本只会先询问，同意后才下载并替换。")
+        let tip = NSTextField(wrappingLabelWithString: "点「录制」后按下新组合键（如 ⌘⇧A），至少含一个修饰键。超时时间是「提取内容」轻量解析的等待秒数，超时后自动改用精准解析（vlm）；「填 0」表示跳过轻量解析、直接使用精准解析（需先填好 MinerU token）；MinerU token 在 mineru.net 的「API 管理」页面创建。「主题」调整软件整体背景色，点「确定」后立即生效并存到配置文件。火山 API Key 供工具栏的「魔法消除」（云端擦除重建）与「提取矢量图」（云端抠图）使用；留空则这两个按钮都会提示去配置。「GIF帧率」是 GIF 录制时每秒抓取的帧数（1-60），默认 24；数值越大越流畅、文件也越大。「录制鼠标箭头」决定截图 / GIF 录制时要不要把鼠标箭头一起录进去：截图默认不带（会挡内容），GIF 录制默认带（能引导观众看哪里）；长截图始终不带（拼接会把箭头重复印在很多帧上）。「检查更新」到 Gitee 上查最新版本，按本机芯片自动匹配安装包；发现新版本只会先询问，同意后才下载并替换。")
         tip.font = .systemFont(ofSize: 11)
         tip.textColor = .secondaryLabelColor
         tip.translatesAutoresizingMaskIntoConstraints = false
@@ -277,6 +301,11 @@ final class SettingsPanel: NSViewController {
 
     /// 带边框复制开关（左右拨动）。初值来自配置文件；点「确定」时随其它设置一起保存。
     private func configureBorderCopySwitch() {
+        cursorShotCheck.state = cursorScreenshotSeed ? .on : .off
+        cursorShotCheck.toolTip = "勾选后，区域截图会把鼠标箭头一起截进去（默认不截，箭头会挡住内容）"
+        cursorGifCheck.state = cursorGifSeed ? .on : .off
+        cursorGifCheck.toolTip = "勾选后，GIF 录制会把鼠标箭头录进画面（默认录制，能引导观众看哪里）"
+
         borderCopySwitch.controlSize = .regular
         borderCopySwitch.state = borderCopySeed ? .on : .off
         borderCopySwitch.toolTip = "只影响粘贴到外部软件；在本软件页签之间复制粘贴永不加边框"
@@ -325,6 +354,15 @@ final class SettingsPanel: NSViewController {
         l.translatesAutoresizingMaskIntoConstraints = false
         l.widthAnchor.constraint(equalToConstant: 96).isActive = true
         return l
+    }
+
+    /// 「录制鼠标箭头」右侧的两个复选按钮：截图 / GIF录制。
+    private func makeCursorChecksRow() -> NSView {
+        let stack = NSStackView(views: [cursorShotCheck, cursorGifCheck])
+        stack.orientation = .horizontal
+        stack.spacing = 14
+        stack.alignment = .centerY
+        return stack
     }
 
     private func makeUnitLabel(_ text: String) -> NSTextField {
@@ -483,7 +521,10 @@ final class SettingsPanel: NSViewController {
             selectedTheme,
             volcKey,
             CGFloat(eraseBrush),
-            borderCopySwitch.state == .on
+            borderCopySwitch.state == .on,
+            Int(max(1, min(60, gifFpsField.doubleValue))),
+            cursorShotCheck.state == .on,
+            cursorGifCheck.state == .on
         )
         dismiss(nil)
     }

@@ -96,7 +96,8 @@ final class TabChipView: NSView {
         label.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
+        // 页签条现在用**手动布局**（要算横向滚动量），所以这里不参与 Auto Layout，
+        // 外部直接设 frame；内部子视图的约束照旧。
         wantsLayer = true
 
         tabButton.translatesAutoresizingMaskIntoConstraints = false
@@ -104,10 +105,6 @@ final class TabChipView: NSView {
         addSubview(label)
 
         NSLayoutConstraint.activate([
-            // Fixed chip height — NSStackView alone would keep the tiny
-            // intrinsic button height, which looked cramped.
-            heightAnchor.constraint(equalToConstant: 28),
-
             // Button fills the whole chip so neighbouring chips touch edge-to-edge.
             tabButton.leadingAnchor.constraint(equalTo: leadingAnchor),
             tabButton.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -123,8 +120,30 @@ final class TabChipView: NSView {
         ])
     }
 
+    /// 页签宽度：标题宽 + 左右各 12 的留白，最小 56。
+    /// （手动布局要靠它，不能像 NSStackView 那样等 Auto Layout 算。）
+    /// 宽度**一律按常规字重**算：激活态是 semibold，若按它算宽度，点一下页签
+    /// 整排就会左右抖 1–2px。
+    static func width(for title: String, active: Bool) -> CGFloat {
+        _ = active
+        let font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        let textWidth = (title as NSString).size(withAttributes: [.font: font]).width
+        return max(56, ceil(textWidth) + 24)
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// 页签条的裁剪容器：负责把滚轮事件转成横向滚动（NSScrollView 太重，这里只需要裁剪）。
+final class TabClipView: NSView {
+    var onScrollWheel: ((NSEvent) -> Void)?
+
+    override var isFlipped: Bool { true }
+
+    override func scrollWheel(with event: NSEvent) {
+        onScrollWheel?(event)
+    }
 }
 
 // MARK: - Flipped views

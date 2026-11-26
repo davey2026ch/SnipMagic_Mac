@@ -13,12 +13,22 @@ final class EditorViewController: NSViewController {
     private let rootStack = NSStackView()
     private let toolbar = NSView()
     private let sidebar = NSView()
-    private let tabStrip = NSStackView()
+    /// 页签条：手动布局（要算横向滚动量），裁剪容器 + 承载 chips 的视图 + 自绘细滚动条。
+    private let tabClip = TabClipView()
+    private let tabStripView = FlippedView()
+    private let tabScrollBar = HScrollBar()
+    private var tabScrollOffset: CGFloat = 0
+    private var tabContentWidth: CGFloat = 0
+    private var isLayingOutTabs = false
     private let statusLabel = NSTextField(labelWithString: "还没有截图")
     private let hintLabel = NSTextField(labelWithString: "")
     private let scroll = ZoomableScrollView()
     private let canvas = CanvasView()
     private let emptyState = NSView()
+    /// 动图页签的播放页（画布整块交给它）。
+    private let gifHost = GifPlayerView()
+    /// 正在「编辑本帧」：此时画布搬进播放页的预览区，标注写回当前帧。
+    private var gifEditing = false
     private let colorSwatch = ColorSwatchButton()
     /// Strong reference to the open color panel (its window does not retain
     /// it strongly enough to survive).
@@ -78,6 +88,7 @@ final class EditorViewController: NSViewController {
 
     var onCaptureRequest: (() -> Void)?
     var onLongCaptureRequest: (() -> Void)?
+    var onGifRecordRequest: (() -> Void)?
 
     private var currentTab: EditorTab? {
         guard let i = currentIndex, i >= 0, i < tabs.count else { return nil }
@@ -118,6 +129,14 @@ final class EditorViewController: NSViewController {
         installKeyMonitor()
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard layoutBuilt, !isLayingOutTabs else { return }
+        isLayingOutTabs = true
+        clampTabScroll()
+        isLayingOutTabs = false
+    }
+
     deinit {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
@@ -146,6 +165,7 @@ final class EditorViewController: NSViewController {
         compareHint.layer?.borderColor = Theme.accent.withAlphaComponent(0.55).cgColor
         rebuildTabs()   // 页签 chip 的底色也需要按新主题重取
         refreshToolButtons()   // 侧栏激活态是自绘蓝底，同样要按新主题重取
+        gifHost.applyTheme()
         canvas.needsDisplay = true
         view.needsDisplay = true
     }
@@ -159,6 +179,11 @@ final class EditorViewController: NSViewController {
             // Don't steal keys from text fields
             if let resp = self.view.window?.firstResponder, resp is NSTextView || resp is NSText {
                 if event.keyCode != 53 { return event }
+            }
+            // 动图页签的 ←/→/空格/Home/End 在窗口层统一拦（不依赖画布焦点，
+            // 否则点了页签之后快捷键会失效）。
+            if self.currentTab?.isGIF == true, !self.gifEditing, self.gifHost.handleKey(event) {
+                return nil
             }
             if cmd && event.charactersIgnoringModifiers == "c" {
                 self.copySelection()
@@ -260,6 +285,10 @@ final class EditorViewController: NSViewController {
         }
 
         let mosaicBtn = makeToolButton("▦ 马赛克", action: #selector(applyMosaic))
+        // GIF 录制：与「开始截图 / 长截图」同样是蓝底白字的主操作，
+        // 宽度对齐「马赛克」（Windows 版是 66pt 定宽，这里用等宽约束达到同样效果）。
+        let gifBtn = makePrimaryButton("GIF", icon: "record.circle", action: #selector(startGifRecord))
+        gifBtn.toolTip = "GIF 录制（框选区域录制成动图，停止后生成可播放的动图页签）"
         // 下面这三个 AI 按钮**按用户指定顺序排**：提取内容 → 提取矢量图 → 魔法消除
         // （"先取文字、再抠图、最后擦除"的使用节奏）。要改顺序先问一句，别随手调。
         extractContentBtn = makeToolButton("📋 提取内容", action: #selector(extractContentClicked))
@@ -284,14 +313,17 @@ final class EditorViewController: NSViewController {
         magicEraseBtn.toolTip = "用「擦除刷」刷出要抹掉的部分，或直接用「框选」框一块，再点这里：由火山引擎的图像修复模型重建背景（纹理还原好，图片会上传到火山引擎）"
         let settingsBtn = makeToolButton("⚙️ 设置", action: #selector(showSettingsPanel))
         let saveAllBtn = makeToolButton("💾 全部保存", action: #selector(saveAllTabs))
-        saveAllBtn.toolTip = "将全部页签导出到指定文件夹（文件类型可选，默认 PNG；当前页签单张保存用 ⌘S）"
+        saveAllBtn.toolTip = "全部保存：自动在「下载」里建「截图大师_年月日时分」文件夹，动图页签存 .gif、其余存 .png（不弹选择框；单张保存用 ⌘S）"
         let undoBtn = makeToolButton("↶ 撤销", action: #selector(doUndo))
         let redoBtn = makeToolButton("↷ 重做", action: #selector(doRedo))
 
         // 数组顺序 = 界面上从左到右的顺序，调 UI 排序改这一行即可。
-        for b in [captureBtn, longCaptureBtn, mosaicBtn, extractContentBtn, extractVectorBtn, magicEraseBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
+        for b in [captureBtn, longCaptureBtn, gifBtn, mosaicBtn, extractContentBtn, extractVectorBtn, magicEraseBtn, settingsBtn, saveAllBtn, undoBtn, redoBtn] {
             stack.addArrangedSubview(b)
         }
+        // 「GIF」宽度与「马赛克」完全一致 —— 必须等两个按钮都进了同一个视图层级
+        // 才能激活这条约束（否则没有共同祖先，激活即抛异常）。
+        gifBtn.widthAnchor.constraint(equalTo: mosaicBtn.widthAnchor).isActive = true
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -460,6 +492,22 @@ final class EditorViewController: NSViewController {
         compareHintLabel.translatesAutoresizingMaskIntoConstraints = false
         compareHint.addSubview(compareHintLabel)
 
+        // GIF 播放页：与画布同区域，切到动图页签时显示、普通页签时隐藏。
+        gifHost.translatesAutoresizingMaskIntoConstraints = false
+        gifHost.isHidden = true
+        bodyContainer.addSubview(gifHost)
+        gifHost.onUpdate = { [weak self] in self?.refreshStatus() }
+        gifHost.onSaveFrame = { [weak self] in self?.saveCurrentGifFrame() }
+        gifHost.onSaveFrameAsTab = { [weak self] in self?.promoteGifFrameToTab() }
+        gifHost.onSaveGIF = { [weak self] in self?.saveCurrentGif() }
+        gifHost.onToggleEdit = { [weak self] in self?.toggleGifFrameEdit() }
+        gifHost.willChangeFrame = { [weak self] in self?.syncGifFrameAnnotations() }
+        gifHost.didChangeFrame = { [weak self] in
+            guard let self, self.gifEditing, let tab = self.currentTab else { return }
+            self.loadCurrentFrameIntoCanvas(tab)
+        }
+        gifHost.onDeleteScope = { [weak self] scope in self?.deleteGifFrames(scope) }
+
         // Empty state
         emptyState.translatesAutoresizingMaskIntoConstraints = false
         emptyState.wantsLayer = true
@@ -500,6 +548,11 @@ final class EditorViewController: NSViewController {
             scroll.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+
+            gifHost.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            gifHost.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            gifHost.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            gifHost.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
 
             emptyState.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             emptyState.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
@@ -582,6 +635,10 @@ final class EditorViewController: NSViewController {
 
     private func enterCompare(tabIndex: Int) {
         guard let current = currentTab, tabs.indices.contains(tabIndex) else { return }
+        guard !current.isGIF, !tabs[tabIndex].isGIF else {
+            flashStatus("动图页签不支持左右对比（可先「存为页签」再对比）")
+            return
+        }
         let target = tabs[tabIndex]
         guard target.id != current.id else { return }
 
@@ -687,18 +744,43 @@ final class EditorViewController: NSViewController {
         tabContainer.layer?.backgroundColor = Theme.toolbarBackground.cgColor
         tabContainer.heightAnchor.constraint(equalToConstant: 44).isActive = true
 
-        tabStrip.orientation = .horizontal
-        tabStrip.spacing = 0
-        tabStrip.alignment = .centerY
-        tabStrip.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
-        tabStrip.translatesAutoresizingMaskIntoConstraints = false
-        tabContainer.addSubview(tabStrip)
+        // 裁剪容器：页签超出宽度时靠它把多出来的部分切掉，滚动只是移动里面那层。
+        tabClip.wantsLayer = true
+        tabClip.layer?.masksToBounds = true
+        tabClip.translatesAutoresizingMaskIntoConstraints = false
+        tabClip.onScrollWheel = { [weak self] event in
+            guard let self else { return }
+            var delta = event.scrollingDeltaX
+            if delta == 0 { delta = event.scrollingDeltaY }
+            if !event.hasPreciseScrollingDeltas { delta *= 40 }
+            self.tabScrollOffset -= delta
+            self.clampTabScroll()
+        }
+        tabContainer.addSubview(tabClip)
         NSLayoutConstraint.activate([
-            tabStrip.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor),
-            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: tabContainer.trailingAnchor),
-            tabStrip.topAnchor.constraint(equalTo: tabContainer.topAnchor),
-            tabStrip.bottomAnchor.constraint(equalTo: tabContainer.bottomAnchor)
+            tabClip.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor),
+            tabClip.trailingAnchor.constraint(equalTo: tabContainer.trailingAnchor),
+            tabClip.topAnchor.constraint(equalTo: tabContainer.topAnchor),
+            tabClip.bottomAnchor.constraint(equalTo: tabContainer.bottomAnchor)
         ])
+        tabClip.addSubview(tabStripView)
+        tabStripView.frame = NSRect(x: 0, y: 0, width: 0, height: 44)
+
+        // 溢出时才出现的细滚动条：贴在 28pt 高的 chip 下沿、发丝线上方那一条。
+        tabScrollBar.translatesAutoresizingMaskIntoConstraints = false
+        tabScrollBar.isHidden = true
+        tabContainer.addSubview(tabScrollBar)
+        NSLayoutConstraint.activate([
+            tabScrollBar.leadingAnchor.constraint(equalTo: tabContainer.leadingAnchor, constant: 8),
+            tabScrollBar.trailingAnchor.constraint(equalTo: tabContainer.trailingAnchor, constant: -8),
+            tabScrollBar.bottomAnchor.constraint(equalTo: tabContainer.bottomAnchor, constant: -1),
+            tabScrollBar.heightAnchor.constraint(equalToConstant: 7)
+        ])
+        tabScrollBar.onChange = { [weak self] offset in
+            guard let self else { return }
+            self.tabScrollOffset = offset
+            self.tabStripView.frame.origin = NSPoint(x: -offset, y: 0)
+        }
 
         // Hairline under the strip — tabs visually "root" into it.
         let hairline = NSView()
@@ -836,10 +918,28 @@ final class EditorViewController: NSViewController {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// GIF 录制结束后生成新动图页签。调用方负责随后把主窗口叫回前台
+    /// （先建页签、再显示窗口，避免主界面先闪一下空白）。
+    func addGifTab(_ anim: GifAnimation) {
+        guard let first = anim.rawImage(at: 0) else { return }
+        let tab = EditorTab(sequence: nextSequence, image: first)
+        tab.gif = anim
+        tab.gifFrame = 0
+        nextSequence += 1
+        tabs.append(tab)
+        undoByTab[tab.id] = UndoStack()
+        currentIndex = tabs.count - 1
+        canvas.tab = nil
+        selectedTool(.select)
+        refreshAll()
+    }
+
     private func selectTab(at index: Int) {
         guard index >= 0, index < tabs.count else { return }
+        finishGifEditingIfNeeded()
         currentIndex = index
-        canvas.tab = tabs[index]
+        // 动图页签不参与标注编辑：画布整块交给播放页。
+        canvas.tab = tabs[index].isGIF ? nil : tabs[index]
         canvas.selectedAnnotation = nil
         canvas.clearSelection()
         canvas.style = style
@@ -883,8 +983,13 @@ final class EditorViewController: NSViewController {
         onLongCaptureRequest?()
     }
 
+    @objc private func startGifRecord() {
+        onGifRecordRequest?()
+    }
+
     private func requestCloseTab(at index: Int) {
         guard index >= 0, index < tabs.count else { return }
+        finishGifEditingIfNeeded()
         let tab = tabs[index]
 
         // Unsaved check
@@ -929,17 +1034,59 @@ final class EditorViewController: NSViewController {
     }
 
     private func rebuildTabs() {
-        tabStrip.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        tabStripView.subviews.forEach { $0.removeFromSuperview() }
 
+        var x: CGFloat = 8
+        var activeFrame: CGRect = .zero
         for (i, tab) in tabs.enumerated() {
+            let active = i == currentIndex
+            let width = TabChipView.width(for: tab.displayTitle, active: active)
             let chip = makeTabChip(
                 title: tab.displayTitle,
                 index: i,
-                active: i == currentIndex,
+                active: active,
                 comparing: tab.id == compareTabID
             )
-            tabStrip.addArrangedSubview(chip)
+            chip.frame = NSRect(x: x, y: 8, width: width, height: 28)
+            tabStripView.addSubview(chip)
+            if active { activeFrame = chip.frame }
+            x += width
         }
+        tabContentWidth = x + 8
+
+        let clipHeight = tabClip.bounds.height > 0 ? tabClip.bounds.height : 44
+        tabStripView.frame = NSRect(x: -tabScrollOffset, y: 0,
+                                    width: max(tabContentWidth, tabClip.bounds.width),
+                                    height: clipHeight)
+        // 激活页签自动滚进可视区（最小移动，不做居中对齐）。
+        revealActiveTab(activeFrame)
+    }
+
+    /// 把激活页签"最小位移"地滚进可视区。
+    private func revealActiveTab(_ frame: CGRect) {
+        let visible = tabClip.bounds.width
+        guard visible > 1, tabs.count > 0 else { return }
+        if frame.minX < tabScrollOffset {
+            tabScrollOffset = frame.minX - 8
+        } else if frame.maxX > tabScrollOffset + visible {
+            tabScrollOffset = frame.maxX - visible + 8
+        }
+        clampTabScroll()
+    }
+
+    /// 夹住滚动量，并同步滚动条与页签层的位置。
+    /// 窗口变宽、溢出量变小时，这一夹保证页签不会"飘"在中间。
+    private func clampTabScroll() {
+        let visible = tabClip.bounds.width
+        let maxOffset = max(0, tabContentWidth - visible)
+        tabScrollOffset = min(max(0, tabScrollOffset), maxOffset)
+        if tabStripView.frame.origin.x != -tabScrollOffset {
+            tabStripView.frame.origin = NSPoint(x: -tabScrollOffset, y: 0)
+        }
+        tabScrollBar.contentWidth = tabContentWidth
+        tabScrollBar.visibleWidth = visible
+        tabScrollBar.setOffset(tabScrollOffset)
+        tabScrollBar.isHidden = !tabScrollBar.isNeeded
     }
 
     private func makeTabChip(title: String, index: Int, active: Bool, comparing: Bool) -> TabChipView {
@@ -1024,6 +1171,12 @@ final class EditorViewController: NSViewController {
     }
 
     func selectedTool(_ tool: ToolKind, preserveSelection: Bool = false) {
+        // 动图页签：一选绘图工具就自动进入「编辑本帧」——
+        // 用户的理解是"这一帧就是一张静态图，直接画就行"，不该还要先点一次按钮。
+        if currentTab?.isGIF == true, !gifEditing,
+           tool != .select, tool != .view, tool != .eraseBrush {
+            beginGifFrameEdit()
+        }
         style.tool = tool
         canvas.style = style
         // 擦除刷不画图形 —— 它刷出「要抹掉的区域」，画布据此切换事件行为。
@@ -1602,8 +1755,11 @@ final class EditorViewController: NSViewController {
             theme: config.theme,
             volcKey: config.volcKey ?? "",
             eraseBrush: config.eraseBrush,
-            borderCopy: config.borderCopyToExternal
-        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme, volcKey, eraseBrush, borderCopy in
+            borderCopy: config.borderCopyToExternal,
+            gifFps: config.gifFps,
+            cursorInScreenshot: config.cursorInScreenshot,
+            cursorInGif: config.cursorInGif
+        ) { [weak self] hotkey, longHotkey, mosaic, thickness, minerUToken, minerUTimeout, theme, volcKey, eraseBrush, borderCopy, gifFps, cursorShot, cursorGif in
             guard let self else { return }
             // 先应用新值（注册快捷键会同步更新 HotkeyService.current*）
             if let (key, mods) = hotkey {
@@ -1641,7 +1797,10 @@ final class EditorViewController: NSViewController {
                 theme: theme,
                 volcKey: volcKey,
                 eraseBrush: eraseBrush,
-                borderCopyToExternal: borderCopy
+                borderCopyToExternal: borderCopy,
+                gifFps: gifFps,
+                cursorInScreenshot: cursorShot,
+                cursorInGif: cursorGif
             )
         }
         // Present on the window's content VC — more reliable than self.presentAsSheet
@@ -1774,8 +1933,14 @@ final class EditorViewController: NSViewController {
         }
     }
 
+    /// 单张保存（⌘S / 右键「保存」）。动图页签存 `.gif`，其余存 PNG/JPG。
+    /// 同名文件不直接覆盖：先问「追加序号再保存 / 替换已有文件」，默认按钮是追加。
     func saveCurrentTab() {
         guard let tab = currentTab else { return }
+        if let anim = tab.gif {
+            saveGIF(anim: anim, suggestedName: tab.displayTitle, tab: tab)
+            return
+        }
         guard let image = tab.renderComposite() else { return }
 
         let panel = NSSavePanel()
@@ -1783,7 +1948,8 @@ final class EditorViewController: NSViewController {
         // Single type (PNG default) → no built-in format popup; the accessory
         // view owns the type choice and updates allowedContentTypes on change.
         panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = tab.displayTitle
+        panel.directoryURL = SaveSupport.lastSaveDirectory
+        panel.nameFieldStringValue = SaveSupport.uniqueDefaultName(for: "\(tab.displayTitle).png")
         panel.canCreateDirectories = true
         panel.showsTagField = false
         panel.accessoryView = makeSaveFormatAccessory().view
@@ -1794,6 +1960,7 @@ final class EditorViewController: NSViewController {
             let flattened = ScreenCaptureService.flatten(image, fillWhite: isJPG) ?? image
             do {
                 try ImageIOExporter.save(flattened, to: url, as: isJPG ? .jpeg : .png)
+                SaveSupport.rememberSaveDirectory(url)
                 tab.markSaved(url: url)
                 self.refreshTabs()
                 self.refreshStatus()
@@ -1806,10 +1973,222 @@ final class EditorViewController: NSViewController {
         }
     }
 
-    /// Save every tab into a user-chosen folder (PNG by default, JPEG optional
-    /// via the file-type popup). Filenames come from tab titles (deduplicated);
-    /// failures are collected and reported.
+    // MARK: - 动图页签：编辑当前帧 / 删帧
+
+    /// 「编辑本帧 / 完成编辑」的开关。
+    private func toggleGifFrameEdit() {
+        if gifEditing { endGifFrameEdit() } else { beginGifFrameEdit() }
+    }
+
+    private func beginGifFrameEdit() {
+        guard !gifEditing, let tab = currentTab, tab.isGIF,
+              let anim = tab.gif, anim.count > 0 else { return }
+        gifEditing = true
+        gifHost.setEditing(true)
+        // 画布搬进播放页的预览区（缩略图条、控制条保持可用，方便逐帧编辑）
+        gifHost.editScroll.documentView = canvas
+        loadCurrentFrameIntoCanvas(tab)
+        updateVisibility()
+        view.layoutSubtreeIfNeeded()
+        view.window?.makeFirstResponder(canvas)
+        flashStatus("编辑第 \(min(tab.gifFrame, anim.count - 1) + 1)/\(anim.count) 帧：用侧栏工具标注，改完点「完成编辑」")
+    }
+
+    /// 把当前帧装进画布（底图用**不带标注**的原始像素，否则标注会被叠两遍）。
+    private func loadCurrentFrameIntoCanvas(_ tab: EditorTab) {
+        guard let anim = tab.gif, anim.count > 0 else { return }
+        let index = min(max(0, tab.gifFrame), anim.count - 1)
+        tab.baseImage = anim.rawImage(at: index) ?? tab.baseImage
+        tab.annotations = anim.annotations(at: index)
+        canvas.clearEraseStrokes()
+        canvas.selectedAnnotation = nil
+        canvas.clearSelection()
+        canvas.style = style
+        canvas.tab = tab
+        // 换帧了，上一帧的撤销栈对不上号，清掉免得 ⌘Z 把别的帧还原回来。
+        undoByTab[tab.id] = UndoStack()
+        refreshStatus()
+    }
+
+    /// 把画布上的标注写回当前帧（切帧前、退出编辑前、保存前都要调）。
+    private func syncGifFrameAnnotations() {
+        guard gifEditing, let tab = currentTab, let anim = tab.gif, anim.count > 0 else { return }
+        let index = min(max(0, tab.gifFrame), anim.count - 1)
+        // 底图被"烘焙"过（马赛克 / 魔法消除 / 粘贴 / 定版都会换一张像素）→ 写回这一帧。
+        if let raw = anim.rawImage(at: index), tab.baseImage !== raw {
+            anim.replaceFrameImage(at: index, with: tab.baseImage)
+        }
+        anim.setAnnotations(tab.annotations, at: index)
+    }
+
+    /// 退出编辑态（不刷新界面）—— 切页签、关页签时用，避免中间态闪一下。
+    private func finishGifEditingIfNeeded() {
+        guard gifEditing else { return }
+        syncGifFrameAnnotations()
+        gifEditing = false
+        canvas.tab = nil
+        canvas.clearEraseStrokes()
+        scroll.documentView = canvas
+        gifHost.setEditing(false)
+    }
+
+    private func endGifFrameEdit() {
+        guard gifEditing else { return }
+        finishGifEditingIfNeeded()
+        refreshAll()
+        flashStatus("已完成编辑：标注已记到这一帧，保存 GIF 时会自动带上")
+    }
+
+    /// 缩略图右键：删除当前帧 / 左侧全部 / 右侧全部。前两种不可恢复，删多帧先确认。
+    private func deleteGifFrames(_ scope: GifDeleteScope) {
+        guard let tab = currentTab, let anim = tab.gif, anim.count > 1 else { return }
+        let index = min(max(0, tab.gifFrame), anim.count - 1)
+        let count = anim.count
+
+        switch scope {
+        case .left where index > 0:
+            if !confirmFrameDeletion("将删除第 1–\(index) 帧（共 \(index) 帧），只剩第 \(index + 1)–\(count) 帧。") { return }
+        case .right where index < count - 1:
+            let removed = count - index - 1
+            if !confirmFrameDeletion("将删除第 \(index + 2)–\(count) 帧（共 \(removed) 帧），只剩第 1–\(index + 1) 帧。") { return }
+        default:
+            break
+        }
+
+        // 编辑中先把手上的标注写回，再删。
+        if gifEditing { syncGifFrameAnnotations() }
+
+        var newIndex = index
+        switch scope {
+        case .current:
+            guard anim.removeFrame(at: index) else { return }
+            newIndex = min(index, anim.count - 1)
+        case .left:
+            guard anim.removeFrames(before: index) else { return }
+            newIndex = 0
+        case .right:
+            guard anim.removeFrames(after: index) else { return }
+            newIndex = index
+        }
+
+        tab.gifFrame = newIndex
+        if gifEditing {
+            loadCurrentFrameIntoCanvas(tab)
+        }
+        gifHost.bind(tab: tab)
+        updateVisibility()
+        refreshStatus()
+        refreshTabs()
+        flashStatus("已删除帧：现在共 \(anim.count) 帧（保存 GIF 时生效）")
+    }
+
+    private func confirmFrameDeletion(_ message: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "删除这些帧？"
+        alert.informativeText = message + "\n删除后无法恢复。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - 动图页签的三个保存出口
+
+    /// 导出前把每帧的标注烘进像素。没有标注的帧原样写（省掉重新量化）。
+    private static func bakedGIFData(_ anim: GifAnimation) -> Data {
+        guard anim.hasAnnotations else { return GifCodec.encode(anim) }
+        let baked = GifAnimation(width: anim.width, height: anim.height,
+                                 frames: anim.framesForExport(), loop: anim.loop)
+        return GifCodec.encode(baked)
+    }
+
+    /// 保存整个动图（`.gif`）。同名规则与单张保存一致。
+    private func saveGIF(anim: GifAnimation, suggestedName: String, tab: EditorTab?) {
+        syncGifFrameAnnotations()
+        let panel = NSSavePanel()
+        panel.title = "保存 GIF"
+        panel.allowedContentTypes = [.gif]
+        panel.directoryURL = SaveSupport.lastSaveDirectory
+        panel.nameFieldStringValue = SaveSupport.uniqueDefaultName(for: "\(suggestedName).gif")
+        panel.canCreateDirectories = true
+        panel.showsTagField = false
+
+        panel.beginSheetModal(for: view.window!) { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            do {
+                try Self.bakedGIFData(anim).write(to: url)
+                SaveSupport.rememberSaveDirectory(url)
+                tab?.markSaved(url: url)
+                self.refreshTabs()
+                self.refreshStatus()
+                self.flashStatus("已保存 GIF 到 \(url.lastPathComponent)")
+            } catch {
+                let a = NSAlert()
+                a.messageText = "保存 GIF 失败"
+                a.informativeText = error.localizedDescription
+                a.runModal()
+            }
+        }
+    }
+
+    /// 保存当前帧为图片，默认名 `P1_<帧号>.png`。
+    func saveCurrentGifFrame() {
+        syncGifFrameAnnotations()
+        guard let tab = currentTab, let anim = tab.gif, anim.count > 0 else { return }
+        let index = min(max(0, tab.gifFrame), anim.count - 1)
+        guard let image = anim.image(at: index) else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "保存当前帧"
+        panel.allowedContentTypes = [.png]
+        panel.directoryURL = SaveSupport.lastSaveDirectory
+        panel.nameFieldStringValue = SaveSupport.uniqueDefaultName(for: "\(tab.displayTitle)_\(index).png")
+        panel.canCreateDirectories = true
+        panel.showsTagField = false
+        panel.accessoryView = makeSaveFormatAccessory().view
+
+        panel.beginSheetModal(for: view.window!) { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            let isJPG = url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg"
+            let out = isJPG ? (ScreenCaptureService.flatten(image, fillWhite: true) ?? image) : image
+            do {
+                try ImageIOExporter.save(out, to: url, as: isJPG ? .jpeg : .png)
+                SaveSupport.rememberSaveDirectory(url)
+                self.flashStatus("已保存第 \(index + 1) 帧")
+            } catch {
+                let a = NSAlert()
+                a.messageText = "保存失败"
+                a.informativeText = error.localizedDescription
+                a.runModal()
+            }
+        }
+    }
+
+    /// 把当前帧变成一个普通图片页签（可以直接标注编辑）。
+    func promoteGifFrameToTab() {
+        syncGifFrameAnnotations()
+        guard let tab = currentTab, let anim = tab.gif, anim.count > 0 else { return }
+        let index = min(max(0, tab.gifFrame), anim.count - 1)
+        guard let image = anim.image(at: index) else { return }
+
+        let newTab = EditorTab(sequence: nextSequence, image: image)
+        nextSequence += 1
+        tabs.append(newTab)
+        undoByTab[newTab.id] = UndoStack()
+        currentIndex = tabs.count - 1
+        refreshAll()
+        flashStatus("已把第 \(index + 1) 帧存成新页签")
+    }
+
+    /// 保存当前动图为 GIF（"保存GIF"按钮的入口）。
+    func saveCurrentGif() {
+        guard let tab = currentTab, let anim = tab.gif else { return }
+        saveGIF(anim: anim, suggestedName: tab.displayTitle, tab: tab)
+    }
+
+    /// 全部保存：**不弹任何选择框**，直接建 `下载/截图大师_yyyyMMddHHmm/`，
+    /// 动图页签写 `.gif`、其余写 `.png`（同名自动加 `_001`）。
     @objc private func saveAllTabs() {
+        syncGifFrameAnnotations()
         guard !tabs.isEmpty else {
             let a = NSAlert()
             a.messageText = "还没有截图"
@@ -1818,66 +2197,55 @@ final class EditorViewController: NSViewController {
             return
         }
 
-        let panel = NSOpenPanel()
-        panel.title = "全部保存"
-        panel.message = "选择保存位置，\(tabs.count) 个页签将以 PNG 格式保存"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        let accessory = makeSaveFormatAccessory()
-        accessory.popup.tag = tabs.count
-        panel.accessoryView = accessory.view
+        let parent = SaveSupport.downloadsDirectory()
+        guard let dir = SaveSupport.uniqueDirectory(in: parent, name: SaveSupport.timestampName()) else {
+            let a = NSAlert()
+            a.messageText = "无法创建保存文件夹"
+            a.informativeText = "在「\(parent.path)」下建目录失败，请检查磁盘空间与权限。"
+            a.runModal()
+            return
+        }
 
-        panel.beginSheetModal(for: view.window!) { resp in
-            guard resp == .OK, let dir = panel.url else { return }
-            let isPNG = accessory.popup.indexOfSelectedItem == 0
-            var savedCount = 0
-            var failedTitles: [String] = []
-            var usedNames = Set<String>()
+        var savedCount = 0
+        var failedTitles: [String] = []
 
-            for tab in self.tabs {
-                guard let image = tab.renderComposite() else {
-                    failedTitles.append(tab.displayTitle)
-                    continue
-                }
-                let base = Self.sanitizedFileName(tab.displayTitle)
-                var name = base
-                var n = 2
-                while usedNames.contains(name.lowercased()) {
-                    name = "\(base)-\(n)"
-                    n += 1
-                }
-                usedNames.insert(name.lowercased())
-                let url = dir.appendingPathComponent("\(name).\(isPNG ? "png" : "jpg")")
-                do {
-                    // JPEG has no alpha — flatten onto white first.
-                    let out = isPNG ? image : (ScreenCaptureService.flatten(image, fillWhite: true) ?? image)
-                    try ImageIOExporter.save(out, to: url, as: isPNG ? .png : .jpeg)
+        for tab in tabs {
+            let title = tab.displayTitle
+            // 文件名按页签序号（P1、P2…，进程内递增不复用）
+            let stem = "P\(tab.sequence)"
+            do {
+                if let anim = tab.gif {
+                    let url = SaveSupport.uniqueFile(in: dir, stem: stem, ext: "gif")
+                    try Self.bakedGIFData(anim).write(to: url)
                     tab.markSaved(url: url)
-                    savedCount += 1
-                } catch {
-                    failedTitles.append(tab.displayTitle)
+                } else {
+                    guard let image = tab.renderComposite() else {
+                        failedTitles.append(title)
+                        continue
+                    }
+                    let url = SaveSupport.uniqueFile(in: dir, stem: stem, ext: "png")
+                    try ImageIOExporter.save(image, to: url, as: .png)
+                    tab.markSaved(url: url)
                 }
+                savedCount += 1
+            } catch {
+                failedTitles.append(title)
             }
+        }
 
-            self.refreshTabs()
-            self.refreshStatus()
+        refreshTabs()
+        refreshStatus()
 
-            if !failedTitles.isEmpty {
-                let a = NSAlert()
-                a.messageText = "部分页签保存失败"
-                a.informativeText = "已保存 \(savedCount)/\(self.tabs.count) 个，失败：\(failedTitles.joined(separator: "、"))"
-                a.runModal()
-            }
+        if failedTitles.isEmpty {
+            flashStatus("已保存 \(savedCount) 张到 \(dir.path)")
+        } else {
+            let a = NSAlert()
+            a.messageText = "部分页签保存失败"
+            a.informativeText = "已保存 \(savedCount)/\(tabs.count) 个到 \(dir.path)，失败：\(failedTitles.joined(separator: "、"))"
+            a.runModal()
         }
     }
 
-    private static func sanitizedFileName(_ name: String) -> String {
-        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
-        let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
-        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "截图" : trimmed
-    }
 
     // MARK: - Text panel
 
@@ -1912,12 +2280,31 @@ final class EditorViewController: NSViewController {
     // MARK: - Refresh
 
     private func refreshAll() {
-        canvas.tab = currentTab
+        let tab = currentTab
+        let isGIF = tab?.isGIF == true
+        if !isGIF { finishGifEditingIfNeeded() }
+        canvas.tab = (isGIF && !gifEditing) ? nil : tab
         canvas.style = style
+        if isGIF, let tab {
+            gifHost.bind(tab: tab)
+        } else {
+            gifHost.unbind()
+        }
+        updateVisibility()
         rebuildTabs()
-        refreshEmptyState()
         refreshStatus()
         refreshTabs()
+    }
+
+    /// 谁该出现：空状态 / 动图页 / 画布。集中在这里，别处只调它。
+    private func updateVisibility() {
+        let isEmpty = tabs.isEmpty
+        let isGIF = currentTab?.isGIF == true
+        let editing = isGIF && gifEditing
+        emptyState.isHidden = !isEmpty
+        gifHost.isHidden = isEmpty || !isGIF
+        scroll.isHidden = isEmpty || (isGIF && !editing)
+        gifHost.setEditing(editing)
     }
 
     private func refreshTabs() {
@@ -1926,13 +2313,21 @@ final class EditorViewController: NSViewController {
     }
 
     private func refreshEmptyState() {
-        let isEmpty = tabs.isEmpty
-        emptyState.isHidden = !isEmpty
-        scroll.isHidden = isEmpty
+        updateVisibility()
         applyShortcutHints()
     }
 
     private func refreshStatus(selection: CGRect? = nil) {
+        if let tab = currentTab, tab.isGIF {
+            if gifEditing, let anim = tab.gif, anim.count > 0 {
+                let index = min(max(0, tab.gifFrame), anim.count - 1)
+                statusLabel.stringValue = "编辑第 \(index + 1)/\(anim.count) 帧 · 用侧栏工具标注 · 点「完成编辑」返回动图"
+            } else {
+                // 动图页签：帧号/播放状态由播放页给（`第 i/n 帧 · ←/→ 逐帧`）。
+                statusLabel.stringValue = gifHost.statusText
+            }
+            return
+        }
         if let tab = currentTab {
             let size = tab.pixelSize
             let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
@@ -1956,6 +2351,8 @@ final class EditorViewController: NSViewController {
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let cmd = flags.contains(.command)
+
+        if currentTab?.isGIF == true, !gifEditing, gifHost.handleKey(event) { return }
 
         if cmd && event.charactersIgnoringModifiers == "c" {
             copySelection()

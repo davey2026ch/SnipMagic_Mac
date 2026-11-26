@@ -138,6 +138,12 @@ enum MinerUOCRService {
         /// 「最近使用颜色」：`#RRGGBB` 列表，最新在前，最多 21 条（红/黑/白是固定格，不记）。
         /// 存进配置文件的 `RecentColors` 键；读写规则见 `RecentColorStore`。
         var recentColors: [String] = []
+        /// GIF 录制帧率：每秒抓几帧，默认 24（1–60）。越大越流畅、文件也越大。
+        var gifFps: Int = 24
+        /// 截图时是否带上鼠标箭头（默认不带 —— 箭头会挡住内容）。
+        var cursorInScreenshot: Bool = false
+        /// GIF 录制时是否带上鼠标箭头（默认带 —— 箭头能引导观众看哪里）。
+        var cursorInGif: Bool = true
 
         /// 与代码内置默认值完全一致的配置。
         static let defaults = MinerUConfig()
@@ -254,6 +260,20 @@ enum MinerUOCRService {
                 case "1", "true", "on", "yes": config.borderCopyToExternal = true
                 default: break
                 }
+            case "gif_fps", "giffps":
+                if let v = Int(value) { config.gifFps = min(max(v, 1), 60) }
+            case "cursor_screenshot", "cursorinscreenshot":
+                switch value.lowercased() {
+                case "1", "true", "on", "yes": config.cursorInScreenshot = true
+                case "0", "false", "off", "no": config.cursorInScreenshot = false
+                default: break
+                }
+            case "cursor_gif", "cursoringif":
+                switch value.lowercased() {
+                case "1", "true", "on", "yes": config.cursorInGif = true
+                case "0", "false", "off", "no": config.cursorInGif = false
+                default: break
+                }
             default:
                 break
             }
@@ -278,7 +298,10 @@ enum MinerUOCRService {
         theme: ThemeMode,
         volcKey: String?,
         eraseBrush: CGFloat,
-        borderCopyToExternal: Bool
+        borderCopyToExternal: Bool,
+        gifFps: Int,
+        cursorInScreenshot: Bool,
+        cursorInGif: Bool
     ) {
         var config = MinerUConfig()
         config.captureHotkey = captureHotkey
@@ -291,6 +314,9 @@ enum MinerUOCRService {
         config.theme = theme
         config.volcKey = volcKey
         config.borderCopyToExternal = borderCopyToExternal
+        config.gifFps = min(max(gifFps, 1), 60)
+        config.cursorInScreenshot = cursorInScreenshot
+        config.cursorInGif = cursorInGif
         // 模板重写会把整份文件覆盖掉，所以「最近使用颜色」必须原样带上，
         // 否则用户存一次设置就把取色历史清空了。
         config.recentColors = RecentColorStore.currentSilently()
@@ -329,6 +355,12 @@ enum MinerUOCRService {
         # 带边框复制：1=粘贴到外部软件（微信、Office、邮件等）时自动加外边框；0=不加。
         # 应用内页签之间复制粘贴不受本项影响，永不加边框
         BorderCopyToExternal=\(config.borderCopyToExternal ? 1 : 0)
+        # GIF 录制帧率：每秒抓取的帧数，有效范围 1~60（默认 24）。越大越流畅、文件也越大
+        gif_fps=\(config.gifFps)
+        # 截图时是否带上鼠标箭头：1=带，0=不带（默认 0，箭头会挡住内容）
+        cursor_screenshot=\(config.cursorInScreenshot ? 1 : 0)
+        # GIF 录制时是否带上鼠标箭头：1=带，0=不带（默认 1，箭头能引导观众看哪里）
+        cursor_gif=\(config.cursorInGif ? 1 : 0)
         # 最近使用颜色（逗号分隔 #RRGGBB，最新在前，最多 \(RecentColorStore.maxCount) 条；
         # 红/黑/白是取色面板里的固定格，不记在这里）。点取色面板的「确定」时自动写入
         \(RecentColorStore.templateLine(config.recentColors))

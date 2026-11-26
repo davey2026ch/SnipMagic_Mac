@@ -98,6 +98,11 @@ final class ScreenCaptureService {
         return image
     }
 
+    /// 供 GIF 录制（SCStream）复用：同一套"按屏取 display + 排除自家窗口"的规则。
+    func contentFilter(screen: NSScreen, excludingWindowNumbers numbers: [Int]) async throws -> SCContentFilter {
+        try await contentFilter(for: screen, excludingWindowNumbers: numbers)
+    }
+
     private func contentFilter(for screen: NSScreen, excludingWindowNumbers numbers: [Int]) async throws -> SCContentFilter {
         guard !numbers.isEmpty else { return try await contentFilter(for: screen) }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)

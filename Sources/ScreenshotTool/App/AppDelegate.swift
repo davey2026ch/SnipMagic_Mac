@@ -6,6 +6,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editorWindow: EditorWindowController!
     private var captureOverlay: CaptureOverlayController?
     private var longSession: LongCaptureSessionController?
+    private var gifRecorder: GifRecordController?
+    /// 录制前主窗口是不是最小化的 —— 取消/停止后按原状态恢复，别把最小化的窗口硬拉出来。
+    private var editorWasMiniaturized = false
     private var permissionGuide: PermissionGuideWindowController?
     private var launchAtLoginObserver: DefaultsObserver?
 
@@ -52,6 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         editorWindow.editorVC.onLongCaptureRequest = { [weak self] in
             self?.beginLongCapture()
+        }
+        editorWindow.editorVC.onGifRecordRequest = { [weak self] in
+            self?.beginGifRecord()
         }
 
         // Show editor on launch
@@ -225,8 +231,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // 区域截图同样不含鼠标箭头：overlay 用这张冻结帧当背景，光标不入画，
                 // 系统绘制的真实光标仍叠在 overlay 之上，用户照样看得见鼠标位置。
                 let image = try await ScreenCaptureService.shared.capture(screen: screen)
+                // 「录制鼠标箭头 - 截图」打开时，同一时刻再抓一张带箭头的：
+                // 浮层用它当底图会看到"冻住的箭头"，所以底图仍用不带箭头的那张，
+                // 只有出图时从这张里裁。
+                var cursorImage: CGImage?
+                if MinerUOCRService.loadConfig().cursorInScreenshot {
+                    cursorImage = try? await ScreenCaptureService.shared.capture(
+                        screen: screen, excludingWindowNumbers: [], showsCursor: true
+                    )
+                }
 
-                let overlay = CaptureOverlayController(screen: screen, image: image)
+                let overlay = CaptureOverlayController(screen: screen, image: image, cursorImage: cursorImage)
                 overlay.overlayDelegate = self
                 self.captureOverlay = overlay
                 overlay.present()
@@ -251,6 +266,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 a.runModal()
             }
         }
+    }
+
+    // MARK: - GIF 录制
+
+    /// 点顶部「GIF」：先把主窗口藏起来（免得把自己录进画面），再弹镂空录制窗口。
+    func beginGifRecord() {
+        guard gifRecorder == nil else { return }   // 已经开着就别重复开
+
+        guard ScreenCaptureService.shared.hasScreenPermission else {
+            requestScreenPermissionAndGuide()
+            return
+        }
+
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main!
+        editorWasMiniaturized = editorWindow.window?.isMiniaturized == true
+        editorWindow.window?.orderOut(nil)
+
+        let config = MinerUOCRService.loadConfig()
+        let controller = GifRecordController(screen: screen, fps: config.gifFps,
+                                             showsCursor: config.cursorInGif, delegate: self)
+        gifRecorder = controller
+        controller.present()
+    }
+
+    /// 按录制前的主窗口状态恢复：原来最小化就留在 Dock 里，别硬拉出来。
+    private func restoreEditorAfterRecording() {
+        gifRecorder = nil
+        if editorWasMiniaturized {
+            editorWindow.window?.orderFront(nil)
+        } else {
+            editorWindow.showAndActivate()
+        }
+        editorWasMiniaturized = false
     }
 
     private func restoreEditorIfNeeded() {
@@ -346,3 +395,18 @@ extension AppDelegate: LongCaptureSessionDelegate {
 
 // Unused helper placeholder
 final class DefaultsObserver {}
+
+
+// MARK: - GIF 录制回调
+
+extension AppDelegate: GifRecordDelegate {
+    func gifRecordDidFinish(_ anim: GifAnimation) {
+        // 先建好动图页签，再显示主窗口 —— 避免主界面先闪一下空白。
+        editorWindow.editorVC.addGifTab(anim)
+        restoreEditorAfterRecording()
+    }
+
+    func gifRecordDidCancel() {
+        restoreEditorAfterRecording()
+    }
+}

@@ -9,6 +9,16 @@ final class EditorTab {
     var savedURL: URL?
     private(set) var sequence: Int
 
+    /// 非空 = 动图页签（GIF 录制产物）。`baseImage` 用第一帧兜底，
+    /// 让"像素尺寸 / 对比模式 / 全部保存"这些通用路径不用特判。
+    /// 动图页签不参与标注编辑 —— 画布整块交给 `GifPlayerView`。
+    var gif: GifAnimation?
+    var gifFrame: Int = 0
+    var gifLoop: Bool = false
+    var gifStripScroll: CGFloat = 0
+
+    var isGIF: Bool { gif != nil }
+
     init(sequence: Int, image: CGImage, title: String? = nil) {
         self.id = UUID()
         self.sequence = sequence
@@ -52,7 +62,13 @@ final class EditorTab {
     /// region "framed" by a drawn shape, so the frame's own outline is not
     /// baked into the copied pixels.
     func renderComposite(includeCursorArea: Bool = true, excluding excluded: Annotation? = nil) -> CGImage? {
-        let size = pixelSize
+        Self.composite(baseImage: baseImage, annotations: annotations, excluding: excluded)
+    }
+
+    /// 把「底图 + 标注」烘成一张图。动图页签的每一帧也走这里（GIF 帧本质就是静态图）。
+    static func composite(baseImage: CGImage, annotations: [Annotation],
+                          excluding excluded: Annotation? = nil) -> CGImage? {
+        let size = CGSize(width: baseImage.width, height: baseImage.height)
         guard size.width > 0, size.height > 0 else { return nil }
         let width = Int(size.width)
         let height = Int(size.height)
